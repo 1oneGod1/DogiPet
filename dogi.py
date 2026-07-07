@@ -55,6 +55,7 @@ if sys.platform.startswith("win"):
 
 try:
     from pynput import keyboard as _pynput_keyboard
+    from pynput import mouse as _pynput_mouse
     HAS_PYNPUT = True
 except ImportError:
     HAS_PYNPUT = False
@@ -180,6 +181,153 @@ def is_morning(hour):
 REST_IDLE_RESET_S = 5 * 60    # jeda input selama ini dihitung sudah istirahat
 REST_NAG_EVERY_S = 10 * 60    # ulangi ajakan tiap 10 menit bila masih lanjut
 REST_CHOICES = (45, 60, 90)   # pilihan ambang menit nonstop
+
+# ---------------------------------------------- reaksi scroll & video meeting
+SCROLL_REACTION_SECONDS = 0.9
+MEETING_POLL_SECONDS = 2.0
+MEETING_LOST_GRACE_SECONDS = 8.0
+MEETING_WATCH_EVERY_SECONDS = 3 * 60
+
+MEETING_BROWSER_EXES = {
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
+    "vivaldi.exe", "arc.exe",
+}
+MEETING_EXES = {
+    "zoom.exe", "teams.exe", "ms-teams.exe", "webex.exe", "webexmta.exe",
+    "skype.exe", "slack.exe", "discord.exe", "around.exe",
+    "ringcentral.exe", "gotomeeting.exe", "bluejeans.exe",
+}
+MEETING_TITLE_MARKERS = (
+    "zoom meeting",
+    "google meet",
+    "meet - ",
+    "microsoft teams meeting",
+    "meeting | microsoft teams",
+    "webex meeting",
+    "webex webinar",
+    "slack huddle",
+    "discord call",
+    "jitsi meet",
+    "whereby",
+    "ringcentral video",
+    "gotomeeting",
+    "around meeting",
+    "bluejeans meeting",
+)
+
+
+def is_meeting_window(executable, title):
+    """Heuristik konservatif untuk jendela meeting yang benar-benar terlihat."""
+    executable = pathlib.Path(str(executable or "")).name.lower()
+    title = str(title or "").strip().lower()
+    if not title:
+        return False
+    if any(marker in title for marker in MEETING_TITLE_MARKERS):
+        return executable in MEETING_EXES or executable in MEETING_BROWSER_EXES
+    if executable == "zoom.exe":
+        return "meeting" in title or "webinar" in title
+    if executable in {"teams.exe", "ms-teams.exe"}:
+        return "meeting" in title or "call" in title
+    if executable in {"webex.exe", "webexmta.exe", "skype.exe"}:
+        return "meeting" in title or "call" in title or "webinar" in title
+    if executable in {"slack.exe", "discord.exe"}:
+        return "huddle" in title or "call" in title
+    if executable in MEETING_EXES:
+        return any(word in title for word in ("meeting", "call", "webinar", "huddle"))
+    return False
+
+
+def visible_meeting_windows():
+    """Kembalikan jendela meeting Windows tanpa mengambil audio/video/data rapat."""
+    if not sys.platform.startswith("win"):
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        process_query_limited = 0x1000
+        candidates = []
+
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        enum_callback = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+        )
+
+        def executable_for_pid(pid):
+            handle = kernel32.OpenProcess(process_query_limited, False, pid)
+            if not handle:
+                return ""
+            try:
+                size = wintypes.DWORD(1024)
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(
+                    handle, 0, buffer, ctypes.byref(size)
+                ):
+                    return pathlib.Path(buffer.value).name
+                return ""
+            finally:
+                kernel32.CloseHandle(handle)
+
+        class Rect(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG),
+                ("top", wintypes.LONG),
+                ("right", wintypes.LONG),
+                ("bottom", wintypes.LONG),
+            ]
+
+        @enum_callback
+        def collect(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            title_buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, length + 1)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            executable = executable_for_pid(pid.value)
+            title = title_buffer.value
+            if not is_meeting_window(executable, title):
+                return True
+            rect = Rect()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return True
+            width = max(0, rect.right - rect.left)
+            height = max(0, rect.bottom - rect.top)
+            if width < 240 or height < 160:
+                return True
+            candidates.append(
+                {
+                    "hwnd": int(hwnd),
+                    "title": title,
+                    "executable": executable,
+                    "center_x": rect.left + width // 2,
+                    "area": width * height,
+                }
+            )
+            return True
+
+        user32.EnumWindows(collect, 0)
+        return sorted(candidates, key=lambda item: item["area"], reverse=True)
+    except (AttributeError, OSError, ValueError):
+        return []
 
 
 class ActivityMonitor:
@@ -461,6 +609,22 @@ TYPE_2 = [
     "................",
 ]
 
+# Scroll: Dogi memakai laptop mininya, dengan indikator posisi scroll ('r')
+# bergerak dari atas ke bawah. Arah naik memakai urutan frame terbalik.
+SCROLL_TOP = [
+    row[:-1] + "r" if index == 7 else row
+    for index, row in enumerate(TYPE_1)
+]
+SCROLL_BOTTOM = [
+    row[:-1] + "r" if index == 9 else row
+    for index, row in enumerate(TYPE_2)
+]
+
+# Meeting: pose gembira diubah menjadi waspada; gelombang 'z' menandai suara
+# gonggongan, sementara pose watch tetap tenang dan menatap jendela meeting.
+MEETING_ALERT_1 = [row.replace("r", "z") for row in HAPPY_1]
+MEETING_ALERT_2 = [row.replace("r", "z") for row in HAPPY_2]
+
 FRAMES = {
     "idle":  [IDLE_1, IDLE_2],
     "walk":  [WALK_1, WALK_2],
@@ -472,6 +636,10 @@ FRAMES = {
     "eat":   [EAT_1, EAT_2],
     "hold":  [HOLD_1, HOLD_2],
     "type":  [TYPE_1, TYPE_2],
+    "scroll_up": [SCROLL_BOTTOM, SCROLL_TOP],
+    "scroll_down": [SCROLL_TOP, SCROLL_BOTTOM],
+    "meeting_alert": [MEETING_ALERT_1, MEETING_ALERT_2],
+    "meeting_watch": [IDLE_1, IDLE_2],
     "think": [IDLE_1, IDLE_1],
     "jump":  [HAPPY_1, HAPPY_2],
 }
@@ -671,6 +839,10 @@ class DogiPet:
                 "dig":   20,
                 "hold":  999999,
                 "type":  20,
+                "scroll_up": 14,
+                "scroll_down": 14,
+                "meeting_alert": 36,
+                "meeting_watch": 24,
                 "eat":   22,
                 "think": 999999,
                 "jump":  len(JUMP_ARC),
@@ -740,6 +912,7 @@ class DogiPet:
             frame = mirror(frame)
         if self.state in (
             "idle", "walk", "chase", "fetch", "think", "dig", "type",
+            "scroll_up", "scroll_down", "meeting_watch",
         ):
             frame = self._shift_eyes(frame, cx, cy)
         for gy, row in enumerate(frame):
@@ -766,7 +939,7 @@ class DogiPet:
             )
 
     # ---------------------------------------------------------------- logika
-    def tick(self, now, cx, cy, typing, thinking):
+    def tick(self, now, cx, cy, typing, thinking, scrolling=0):
         # Drag punya prioritas tertinggi: jangan biarkan status agent, typing,
         # atau pergerakan otomatis menimpa pose Dogi yang sedang digendong.
         if self._drag_start and self._moved:
@@ -777,7 +950,7 @@ class DogiPet:
             return
 
         # status agent AI (prioritas tertinggi)
-        if thinking and self.state not in ("think", "jump"):
+        if thinking and self.state not in ("think", "jump", "meeting_alert"):
             self.set_state("think")
         elif not thinking and self.state == "think":
             self.set_state("idle")
@@ -788,6 +961,18 @@ class DogiPet:
         if self.state == "type" and not typing \
                 and now - self.app.last_key_time > 2.0:
             self.set_state("idle")
+
+        # Scroll global -> Dogi menggeser indikator di laptop mini. Setiap arah
+        # memiliki urutan frame berbeda agar gerakannya terasa mengikuti roda.
+        if scrolling and self.app.scroll_reaction_on and self.state in (
+            "idle", "walk", "sleep", "dig", "type",
+            "scroll_up", "scroll_down",
+        ):
+            scroll_state = "scroll_up" if scrolling > 0 else "scroll_down"
+            if self.state != scroll_state:
+                self.set_state(scroll_state)
+        elif self.state in ("scroll_up", "scroll_down") and not scrolling:
+            self.set_state("type" if typing else "idle")
 
         # naluri berburu kursor
         if self.state in ("idle", "walk"):
@@ -837,7 +1022,10 @@ class DogiPet:
         # batas layar & kedipan
         self.x = max(0, min(self.app.screen_w - CANVAS_W, self.x))
         self.blink = (
-            self.state in ("idle", "dig", "type", "think")
+            self.state in (
+                "idle", "dig", "type", "think",
+                "scroll_up", "scroll_down", "meeting_watch",
+            )
             and random.random() < 0.08
         )
 
@@ -849,7 +1037,10 @@ class DogiPet:
                 self.set_state("happy", 8)
             elif self.state == "eat":
                 self.set_state("happy")
-            elif self.state in ("sleep", "happy", "dig", "type"):
+            elif self.state in (
+                "sleep", "happy", "dig", "type",
+                "scroll_up", "scroll_down", "meeting_alert", "meeting_watch",
+            ):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch"):
                 nxt = random.choices(
@@ -1034,6 +1225,7 @@ class ControlCenter:
         self._build_home_page()
         self._build_customize_page()
         self._build_focus_page()
+        self._build_reactions_page()
         self._build_agent_page()
         self._build_updates_page()
         self._build_about_page()
@@ -1137,6 +1329,7 @@ class ControlCenter:
             ("HOME", "BERANDA"),
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
+            ("REACTIONS", "REAKSI"),
             ("AGENT", "AGENT AI"),
             ("UPDATES", "PEMBARUAN"),
             ("ABOUT", "TENTANG"),
@@ -1470,6 +1663,91 @@ class ControlCenter:
             width=24,
         ).pack(anchor="w", padx=18, pady=(14, 18))
 
+    def _build_reactions_page(self):
+        page = self._new_page(
+            "REACTIONS",
+            "DOGI PEKA DENGAN AKTIVITASMU.",
+            "Scroll dan meeting memunculkan gerakan kontekstual yang berbeda.",
+        )
+
+        scroll_card = self._card(page)
+        scroll_card.pack(fill="x", pady=(0, 12))
+        scroll_row = tk.Frame(scroll_card, bg=self.PANEL)
+        scroll_row.pack(fill="x", padx=18, pady=18)
+        scroll_copy = tk.Frame(scroll_row, bg=self.PANEL)
+        scroll_copy.pack(side="left", fill="x", expand=True)
+        self._label(scroll_copy, "IKUT SCROLL", 11, bold=True).pack(anchor="w")
+        self._label(
+            scroll_copy,
+            "Dogi menggerakkan indikator laptop mengikuti scroll atas/bawah.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", pady=(3, 0))
+        self.scroll_reaction_button = self._button(
+            scroll_row,
+            "",
+            self.app.toggle_scroll_reaction,
+            width=12,
+        )
+        self.scroll_reaction_button.pack(side="right")
+
+        meeting_card = self._card(page)
+        meeting_card.pack(fill="both", expand=True)
+        self._label(meeting_card, "REAKSI VIDEO MEETING", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 4)
+        )
+        self.meeting_status_label = self._label(meeting_card, "", 14, bold=True)
+        self.meeting_status_label.pack(anchor="w", padx=18, pady=(4, 14))
+
+        meeting_row = tk.Frame(meeting_card, bg=self.PANEL)
+        meeting_row.pack(fill="x", padx=18, pady=6)
+        meeting_copy = tk.Frame(meeting_row, bg=self.PANEL)
+        meeting_copy.pack(side="left", fill="x", expand=True)
+        self._label(meeting_copy, "LIHAT JENDELA MEETING", 10, bold=True).pack(anchor="w")
+        self._label(
+            meeting_copy,
+            "Zoom, Teams, Meet, Webex, Slack/Discord call.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w")
+        self.meeting_reaction_button = self._button(
+            meeting_row,
+            "",
+            self.app.toggle_meeting_reaction,
+            width=12,
+        )
+        self.meeting_reaction_button.pack(side="right")
+
+        bark_row = tk.Frame(meeting_card, bg=self.PANEL)
+        bark_row.pack(fill="x", padx=18, pady=6)
+        bark_copy = tk.Frame(bark_row, bg=self.PANEL)
+        bark_copy.pack(side="left", fill="x", expand=True)
+        self._label(bark_copy, "GONGGONG SAAT MEETING MULAI", 10, bold=True).pack(
+            anchor="w"
+        )
+        self._label(
+            bark_copy,
+            "Sekali saat jendela meeting baru terdeteksi, bukan berulang.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w")
+        self.meeting_bark_button = self._button(
+            bark_row,
+            "",
+            self.app.toggle_meeting_bark,
+            width=12,
+        )
+        self.meeting_bark_button.pack(side="right")
+
+        self._label(
+            meeting_card,
+            "PRIVASI: DOGIPET HANYA MEMBACA NAMA APP, JUDUL, DAN POSISI\n"
+            "JENDELA. TIDAK MENGAKSES KAMERA, MIKROFON, ATAU ISI MEETING.",
+            8,
+            self.MUTED,
+            justify="left",
+        ).pack(anchor="w", padx=18, pady=(18, 16))
+
     def _build_updates_page(self):
         page = self._new_page(
             "UPDATES",
@@ -1689,6 +1967,34 @@ class ControlCenter:
             fg=self.DARK if not continuous else self.TEXT,
         )
 
+        self.scroll_reaction_button.configure(
+            text="ON" if self.app.scroll_reaction_on else "OFF",
+            bg=self.ACCENT if self.app.scroll_reaction_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.scroll_reaction_on else self.TEXT,
+        )
+        self.meeting_reaction_button.configure(
+            text="ON" if self.app.meeting_reaction_on else "OFF",
+            bg=self.ACCENT if self.app.meeting_reaction_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.meeting_reaction_on else self.TEXT,
+        )
+        meeting_bark_enabled = (
+            self.app.meeting_reaction_on and self.app.meeting_bark_on
+        )
+        self.meeting_bark_button.configure(
+            text="ON" if self.app.meeting_bark_on else "OFF",
+            state="normal" if self.app.meeting_reaction_on else "disabled",
+            bg=self.ACCENT if meeting_bark_enabled else self.PANEL_ALT,
+            fg=self.DARK if meeting_bark_enabled else self.TEXT,
+        )
+        if self.app.meeting_active:
+            meeting_status = f"MEETING TERDETEKSI  /  {self.app.meeting_title.upper()}"
+        else:
+            meeting_status = "TIDAK ADA MEETING AKTIF"
+        self.meeting_status_label.configure(
+            text=meeting_status,
+            fg=self.ACCENT if self.app.meeting_active else self.TEXT,
+        )
+
         for style, button in self.sound_buttons.items():
             selected = style == self.app.sound_style
             button.configure(
@@ -1799,6 +2105,8 @@ class DogiApp:
         except Exception:
             pass
         self.last_key_time = 0
+        self.last_scroll_time = 0
+        self.scroll_direction = 0
         self.last_cursor = (0, 0)
         self._friend_cd = 0
 
@@ -1825,6 +2133,16 @@ class DogiApp:
         self._rest_nag_at = 0.0
         self._rest_exceeded = False
 
+        self.scroll_reaction_on = True
+        self.meeting_reaction_on = True
+        self.meeting_bark_on = True
+        self.meeting_active = False
+        self.meeting_title = ""
+        self._meeting_key = None
+        self._meeting_poll_at = 0.0
+        self._meeting_last_seen = 0.0
+        self._meeting_watch_at = 0.0
+
         self.theme = "Shiba"
         self._load_config()
         ensure_bark_wav(self.sound_style)
@@ -1833,6 +2151,9 @@ class DogiApp:
             listener = _pynput_keyboard.Listener(on_press=self._on_key)
             listener.daemon = True
             listener.start()
+            mouse_listener = _pynput_mouse.Listener(on_scroll=self._on_scroll)
+            mouse_listener.daemon = True
+            mouse_listener.start()
 
         self.pets = [
             DogiPet(
@@ -1868,6 +2189,9 @@ class DogiApp:
             self.rest_reminder_on = bool(cfg.get("rest_reminder", True))
             if cfg.get("rest_after_min") in REST_CHOICES:
                 self.rest_after_min = cfg["rest_after_min"]
+            self.scroll_reaction_on = bool(cfg.get("scroll_reaction", True))
+            self.meeting_reaction_on = bool(cfg.get("meeting_reaction", True))
+            self.meeting_bark_on = bool(cfg.get("meeting_bark", True))
             raw_stats = cfg.get("stats") or {}
             for key in self.stats:
                 if isinstance(raw_stats.get(key), (int, float)):
@@ -1897,6 +2221,9 @@ class DogiApp:
                         "sound_style": self.sound_style,
                         "rest_reminder": self.rest_reminder_on,
                         "rest_after_min": self.rest_after_min,
+                        "scroll_reaction": self.scroll_reaction_on,
+                        "meeting_reaction": self.meeting_reaction_on,
+                        "meeting_bark": self.meeting_bark_on,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
                         "stats_ts": time.time(),
                         "last_greet_date": self.last_greet_date,
@@ -1912,6 +2239,10 @@ class DogiApp:
     # ------------------------------------------------------------- input
     def _on_key(self, _key, _injected=False):
         self.last_key_time = time.time()
+
+    def _on_scroll(self, _x, _y, _dx, dy, _injected=False):
+        self.last_scroll_time = time.time()
+        self.scroll_direction = 1 if dy > 0 else -1
 
     def _cursor(self):
         return self.root.winfo_pointerx(), self.root.winfo_pointery()
@@ -2029,6 +2360,68 @@ class DogiApp:
                 self.pets[0].show_msg("Waktunya makan siang!", 6)
             self.save_config()
 
+    def _check_meeting(self, now):
+        """Deteksi jendela rapat, arahkan Dogi, lalu beri reaksi seperlunya."""
+        if self.smoke_test:
+            return
+        if not self.meeting_reaction_on:
+            self.meeting_active = False
+            self.meeting_title = ""
+            self._meeting_key = None
+            return
+        if now < self._meeting_poll_at:
+            return
+        self._meeting_poll_at = now + MEETING_POLL_SECONDS
+
+        windows = visible_meeting_windows()
+        if not windows:
+            if now - self._meeting_last_seen > MEETING_LOST_GRACE_SECONDS:
+                self.meeting_active = False
+                self.meeting_title = ""
+                self._meeting_key = None
+            return
+
+        meeting = windows[0]
+        key = (meeting["hwnd"], meeting["executable"].lower())
+        is_new = key != self._meeting_key
+        self._meeting_key = key
+        self._meeting_last_seen = now
+        self.meeting_active = True
+        self.meeting_title = pathlib.Path(meeting["executable"]).stem
+
+        # Selama meeting aktif, semua Dogi melihat ke pusat jendela rapat.
+        for pet in self.pets:
+            if meeting["center_x"] != pet.center_x():
+                pet.facing = 1 if meeting["center_x"] > pet.center_x() else -1
+
+        if not self.pets:
+            return
+        primary = self.pets[0]
+        if is_new:
+            self._meeting_watch_at = now + MEETING_WATCH_EVERY_SECONDS
+            if not (primary._drag_start and primary._moved):
+                primary.set_state("meeting_alert")
+                primary.show_msg(
+                    random.choice(
+                        (
+                            "Guk! Siapa itu?",
+                            "Ada orang baru!",
+                            "Aku jagain meetingnya!",
+                        )
+                    ),
+                    6,
+                )
+                if self.meeting_bark_on:
+                    bark(self.root, self.sound_style)
+        elif now >= self._meeting_watch_at:
+            self._meeting_watch_at = now + MEETING_WATCH_EVERY_SECONDS
+            if primary.state in ("idle", "walk", "dig"):
+                primary.set_state("meeting_watch")
+                primary.show_msg(
+                    random.choice(("Aku masih ngawasin.", "Meetingnya aman!")),
+                    5,
+                )
+
     # ------------------------------------------------------------- aksi
     def celebrate_all(self, msg):
         bark(self.root, self.sound_style)
@@ -2086,6 +2479,29 @@ class DogiApp:
                 "Senyap, ya..." if style == "senyap" else "Guk guk!", 2
             )
         bark(self.root, style)  # pratinjau langsung
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def toggle_scroll_reaction(self):
+        self.scroll_reaction_on = not self.scroll_reaction_on
+        self.save_config()
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def toggle_meeting_reaction(self):
+        self.meeting_reaction_on = not self.meeting_reaction_on
+        self._meeting_poll_at = 0.0
+        if not self.meeting_reaction_on:
+            self.meeting_active = False
+            self.meeting_title = ""
+            self._meeting_key = None
+        self.save_config()
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def toggle_meeting_bark(self):
+        self.meeting_bark_on = not self.meeting_bark_on
+        self.save_config()
         if self.control_center:
             self.control_center.sync_from_app()
 
@@ -2239,6 +2655,7 @@ class DogiApp:
         self._update_stats(now)
         self._check_clock(now)
         self._check_needs(now)
+        self._check_meeting(now)
 
         if self.pomo_end and now >= self.pomo_end:
             self.pomo_end = None
@@ -2251,13 +2668,21 @@ class DogiApp:
             self.celebrate_all("Peregangan dulu, yuk!")
 
         typing = HAS_PYNPUT and (now - self.last_key_time) < 1.2
+        scrolling = (
+            self.scroll_direction
+            if HAS_PYNPUT
+            and now - self.last_scroll_time < SCROLL_REACTION_SECONDS
+            else 0
+        )
         moved = (
             abs(cx - self.last_cursor[0]) + abs(cy - self.last_cursor[1]) > 3
         )
         self._check_rest(now, typing or moved)
 
         for pet in self.pets:
-            pet.tick(now, cx, cy, typing, self.agent_thinking)
+            pet.tick(
+                now, cx, cy, typing, self.agent_thinking, scrolling=scrolling
+            )
 
         self._check_friends(now)
         self.last_cursor = (cx, cy)
@@ -2285,6 +2710,13 @@ if __name__ == "__main__":
         raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
     application = DogiApp(smoke_test=is_smoke_test)
+    page_argument = next(
+        (arg.split("=", 1)[1].upper() for arg in sys.argv if arg.startswith("--page=")),
+        None,
+    )
+    if page_argument in application.control_center.pages:
+        application.control_center.show_page(page_argument)
+        application.root.after(50, application.show_control_center)
     if is_smoke_test:
         application.root.after(1200, application.quit)
     application.run()

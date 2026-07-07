@@ -18,11 +18,16 @@ sementara desktop pet tetap aktif.
 
 ![DogiPet Control Center](qa/control-center-v030.png)
 
+![Pengaturan reaksi scroll dan meeting](qa/control-center-reactions-v040.png)
+
 ## Fitur saat ini
 
 - Mata mengikuti kursor dan berkedip.
 - Mengejar kursor yang bergerak cepat.
 - Ikut mengetik di laptop mini saat kamu mengetik.
+- Ikut menggerakkan indikator laptop saat kamu scroll ke atas atau bawah.
+- Mengenali jendela Zoom, Teams, Google Meet, Webex, dan call lain; Dogi
+  menghadap ke posisi meeting, menggonggong sekali, lalu sesekali mengawasi.
 - Mengajak istirahat bila kamu terdeteksi aktif nonstop terlalu lama
   (ambang 45/60/90 menit bisa diatur di halaman Fokus).
 - Klik untuk mengelus; saat di-drag Dogi berubah ke pose digendong dengan kaki
@@ -38,7 +43,7 @@ sementara desktop pet tetap aktif.
 - Reaksi status AI agent, dengan pemasangan hook Claude Code sekali klik
   dari Control Center (halaman Agent AI).
 - Control Center native untuk preview, aksi cepat, personalisasi, fokus, dan
-  pengaturan pembaruan.
+  pengaturan Reaksi serta pembaruan.
 - Installer Windows dengan pilihan startup.
 - Pembaruan aman dari GitHub Releases dengan verifikasi SHA-256.
 
@@ -115,6 +120,10 @@ python dogi_hook.py done
 
 Status ditulis secara lokal ke `~/.dogi/agent_status.json`. Dogi tidak
 mengirim isi prompt, ketikan, atau data penggunaan ke server mana pun.
+
+Deteksi meeting juga lokal dan konservatif: DogiPet hanya memeriksa nama app,
+judul jendela, serta posisinya. Kamera, mikrofon, peserta, dan isi meeting tidak
+pernah dibaca.
 
 ## Data lokal
 
