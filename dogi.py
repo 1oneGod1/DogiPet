@@ -76,11 +76,12 @@ CHASE_RANGE = 350
 TRANSPARENT = "#ff00fe"
 
 GRID_W, GRID_H = 16, 12
-SPR_W, SPR_H = GRID_W * SCALE, GRID_H * SCALE
+PIXEL_SPR_W, PIXEL_SPR_H = GRID_W * SCALE, GRID_H * SCALE
+SPR_W, SPR_H = 160, 140
 BUBBLE_H = 36
 CANVAS_W = 230
 CANVAS_H = BUBBLE_H + SPR_H
-SPR_X = (CANVAS_W - SPR_W) // 2
+SPR_X = (CANVAS_W - PIXEL_SPR_W) // 2
 SPR_Y = BUBBLE_H
 
 POMODORO_MIN = 25
@@ -93,6 +94,12 @@ FRIEND_COOLDOWN = 25       # detik jeda antar sapaan
 CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
+
+
+def resource_path(*parts):
+    """Resolve bundled assets in source runs and PyInstaller builds."""
+    base = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent))
+    return base.joinpath(*parts)
 
 # gaya gonggongan: deretan (frek awal, frek akhir, durasi, volume)
 BARK_STYLES = {
@@ -184,6 +191,10 @@ REST_CHOICES = (45, 60, 90)   # pilihan ambang menit nonstop
 
 # ---------------------------------------------- reaksi scroll & video meeting
 SCROLL_REACTION_SECONDS = 0.9
+CURSOR_SWING_MIN_RUN = 55
+CURSOR_SWING_WINDOW_SECONDS = 2.6
+CURSOR_SWING_REVERSALS = 4
+DIZZY_COOLDOWN_SECONDS = 8.0
 MEETING_POLL_SECONDS = 2.0
 MEETING_LOST_GRACE_SECONDS = 8.0
 MEETING_WATCH_EVERY_SECONDS = 3 * 60
@@ -328,6 +339,59 @@ def visible_meeting_windows():
         return sorted(candidates, key=lambda item: item["area"], reverse=True)
     except (AttributeError, OSError, ValueError):
         return []
+
+
+class CursorSwingDetector:
+    """Detect deliberate, repeated horizontal cursor reversals."""
+
+    def __init__(
+        self,
+        min_run=CURSOR_SWING_MIN_RUN,
+        window=CURSOR_SWING_WINDOW_SECONDS,
+        reversals=CURSOR_SWING_REVERSALS,
+        cooldown=DIZZY_COOLDOWN_SECONDS,
+    ):
+        self.min_run = min_run
+        self.window = window
+        self.reversals = reversals
+        self.cooldown = cooldown
+        self.last_x = None
+        self.direction = 0
+        self.run_distance = 0
+        self.reversal_times = []
+        self.cooldown_until = 0.0
+
+    def update(self, x, now):
+        if self.last_x is None:
+            self.last_x = x
+            return 0, False
+        delta = x - self.last_x
+        self.last_x = x
+        if abs(delta) < 5:
+            return 0, False
+        direction = 1 if delta > 0 else -1
+        if not self.direction:
+            self.direction = direction
+            self.run_distance = abs(delta)
+        elif direction == self.direction:
+            self.run_distance += abs(delta)
+        else:
+            if self.run_distance >= self.min_run:
+                self.reversal_times.append(now)
+            self.direction = direction
+            self.run_distance = abs(delta)
+        self.reversal_times = [
+            timestamp for timestamp in self.reversal_times
+            if now - timestamp <= self.window
+        ]
+        triggered = (
+            len(self.reversal_times) >= self.reversals
+            and now >= self.cooldown_until
+        )
+        if triggered:
+            self.reversal_times.clear()
+            self.cooldown_until = now + self.cooldown
+        return direction, triggered
 
 
 class ActivityMonitor:
@@ -642,7 +706,32 @@ FRAMES = {
     "meeting_watch": [IDLE_1, IDLE_2],
     "think": [IDLE_1, IDLE_1],
     "jump":  [HAPPY_1, HAPPY_2],
+    "dizzy": [IDLE_1, IDLE_2],
 }
+
+# Raster sprites imported from the user-approved reference sheet.  FRAMES stays
+# as a safe fallback for old/source-only installs, while normal builds use these
+# richer 4-5 frame PNG animations.
+SPRITE_FRAME_COUNTS = {
+    "idle": 4,
+    "walk": 4,
+    "chase": 4,
+    "fetch": 4,
+    "sleep": 4,
+    "happy": 4,
+    "dig": 4,
+    "eat": 4,
+    "hold": 4,
+    "type": 4,
+    "scroll_up": 4,
+    "scroll_down": 4,
+    "meeting_alert": 4,
+    "meeting_watch": 4,
+    "think": 4,
+    "jump": 4,
+    "dizzy": 4,
+}
+SPRITE_NATIVE_LEFT = {"sleep", "meeting_alert", "meeting_watch"}
 
 JUMP_ARC = [6, 14, 22, 26, 26, 22, 14, 6, 0]
 
@@ -799,6 +888,7 @@ class DogiPet:
         self.blink = False
         self.temp_msg = None
         self.fetch_bone = None
+        self._sprite_cache = {}
 
         self._drag_start = None
         self._moved = False
@@ -846,6 +936,7 @@ class DogiPet:
                 "eat":   22,
                 "think": 999999,
                 "jump":  len(JUMP_ARC),
+                "dizzy": 44,
             }[state]
         self.state_timer = duration
         if state == "walk":
@@ -904,27 +995,56 @@ class DogiPet:
             return f"{rem // 60:02d}:{rem % 60:02d}"
         return None
 
+    def _sprite_image(self):
+        count = SPRITE_FRAME_COUNTS.get(self.state, 0)
+        if not count:
+            return None
+        frame_index = self.frame_i % count
+        native_left = self.state in SPRITE_NATIVE_LEFT
+        mirrored = self.facing == (1 if native_left else -1)
+        key = (self.theme, self.state, frame_index, mirrored)
+        if key in self._sprite_cache:
+            return self._sprite_cache[key]
+        suffix = "_left" if mirrored else ""
+        path = resource_path(
+            "assets", "sprites", self.theme.lower(),
+            f"{self.state}_{frame_index}{suffix}.png",
+        )
+        try:
+            image = tk.PhotoImage(file=str(path))
+        except tk.TclError:
+            image = None
+        self._sprite_cache[key] = image
+        return image
+
     def draw(self, cx, cy):
         self.canvas.delete("all")
         pal = self.palette()
-        frame = FRAMES[self.state][self.frame_i % 2]
-        if self.facing == -1 and self.state != "sleep":
-            frame = mirror(frame)
-        if self.state in (
-            "idle", "walk", "chase", "fetch", "think", "dig", "type",
-            "scroll_up", "scroll_down", "meeting_watch",
-        ):
-            frame = self._shift_eyes(frame, cx, cy)
-        for gy, row in enumerate(frame):
-            for gx, ch in enumerate(row):
-                color = pal.get(ch)
-                if color:
-                    x0 = SPR_X + gx * SCALE
-                    y0 = SPR_Y + gy * SCALE
-                    self.canvas.create_rectangle(
-                        x0, y0, x0 + SCALE, y0 + SCALE,
-                        fill=color, outline=color,
-                    )
+        sprite = self._sprite_image()
+        if sprite is not None:
+            self.canvas.create_image(
+                CANVAS_W // 2, SPR_Y + SPR_H,
+                image=sprite, anchor="s",
+            )
+        else:
+            frame = FRAMES[self.state][self.frame_i % 2]
+            if self.facing == -1 and self.state != "sleep":
+                frame = mirror(frame)
+            if self.state in (
+                "idle", "walk", "chase", "fetch", "think", "dig", "type",
+                "scroll_up", "scroll_down", "meeting_watch",
+            ):
+                frame = self._shift_eyes(frame, cx, cy)
+            for gy, row in enumerate(frame):
+                for gx, ch in enumerate(row):
+                    color = pal.get(ch)
+                    if color:
+                        x0 = SPR_X + gx * SCALE
+                        y0 = SPR_Y + gy * SCALE
+                        self.canvas.create_rectangle(
+                            x0, y0, x0 + SCALE, y0 + SCALE,
+                            fill=color, outline=color,
+                        )
         text = self._bubble_text()
         if text:
             w = len(text) * 7 + 18
@@ -1040,6 +1160,7 @@ class DogiPet:
             elif self.state in (
                 "sleep", "happy", "dig", "type",
                 "scroll_up", "scroll_down", "meeting_alert", "meeting_watch",
+                "dizzy",
             ):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch"):
@@ -1871,6 +1992,27 @@ class ControlCenter:
 
     def _draw_preview(self):
         self.preview.delete("all")
+        pet = self.app.pets[0] if self.app.pets else None
+        state = pet.state if pet and pet.state in SPRITE_FRAME_COUNTS else "idle"
+        frame_index = pet.frame_i % SPRITE_FRAME_COUNTS[state] if pet else 0
+        native_left = state in SPRITE_NATIVE_LEFT
+        mirrored = bool(pet and pet.facing == (1 if native_left else -1))
+        suffix = "_left" if mirrored else ""
+        path = resource_path(
+            "assets", "sprites", self.app.theme.lower(),
+            f"{state}_{frame_index}{suffix}.png",
+        )
+        try:
+            self._preview_sprite_image = tk.PhotoImage(file=str(path))
+        except tk.TclError:
+            self._preview_sprite_image = None
+        if self._preview_sprite_image is not None:
+            self.preview.create_image(
+                int(self.preview.cget("width")) // 2,
+                int(self.preview.cget("height")) // 2,
+                image=self._preview_sprite_image,
+            )
+            return
         frame = IDLE_1
         scale = 13
         width = len(frame[0]) * scale
@@ -2071,13 +2213,13 @@ class ControlCenter:
 
 # ------------------------------------------------------------- aplikasi utama
 class DogiApp:
-    def __init__(self, smoke_test=False):
+    def __init__(self, smoke_test=False, opaque_preview=False):
         self.smoke_test = smoke_test
         self.root = tk.Tk()
         self.root.withdraw()  # root disembunyikan; tiap Dogi punya jendela
 
         self.transparent_ok = False
-        if sys.platform.startswith("win"):
+        if sys.platform.startswith("win") and not opaque_preview:
             probe = tk.Toplevel(self.root)
             try:
                 probe.attributes("-transparentcolor", TRANSPARENT)
@@ -2108,6 +2250,7 @@ class DogiApp:
         self.last_scroll_time = 0
         self.scroll_direction = 0
         self.last_cursor = (0, 0)
+        self.cursor_swing = CursorSwingDetector()
         self._friend_cd = 0
 
         self.auto_update = True
@@ -2246,6 +2389,22 @@ class DogiApp:
 
     def _cursor(self):
         return self.root.winfo_pointerx(), self.root.winfo_pointery()
+
+    def _check_cursor_swing(self, now, cursor_x):
+        direction, triggered = self.cursor_swing.update(cursor_x, now)
+        if direction:
+            for pet in self.pets:
+                if pet.state in ("idle", "walk", "happy"):
+                    pet.facing = direction
+        if not triggered:
+            return False
+        for pet in self.pets:
+            if pet.state not in (
+                "hold", "fetch", "think", "meeting_alert", "meeting_watch",
+            ):
+                pet.set_state("dizzy")
+                pet.show_msg("Waduh... pusing!", 3)
+        return True
 
     # ------------------------------------------------------------- agent
     def _poll_agent_status(self):
@@ -2650,6 +2809,8 @@ class DogiApp:
         now = time.time()
         cx, cy = self._cursor()
 
+        self._check_cursor_swing(now, cx)
+
         self._poll_agent_status()
         self._poll_update_events()
         self._update_stats(now)
@@ -2709,7 +2870,16 @@ if __name__ == "__main__":
         dogi_hook.write_status(status)
         raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
-    application = DogiApp(smoke_test=is_smoke_test)
+    application = DogiApp(
+        smoke_test=is_smoke_test,
+        opaque_preview="--opaque-preview" in sys.argv,
+    )
+    state_argument = next(
+        (arg.split("=", 1)[1].lower() for arg in sys.argv if arg.startswith("--state=")),
+        None,
+    )
+    if state_argument in SPRITE_FRAME_COUNTS and application.pets:
+        application.pets[0].set_state(state_argument, 999999)
     page_argument = next(
         (arg.split("=", 1)[1].upper() for arg in sys.argv if arg.startswith("--page=")),
         None,

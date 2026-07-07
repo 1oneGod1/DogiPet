@@ -5,9 +5,10 @@ tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
 istirahat, dan merayakan saat AI agent selesai bekerja.
 
 Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
-kode, suara, dan identitas Dogi sendiri.
+kode, suara, dan identitas Dogi sendiri. Mulai v0.5.0, semua gerakan memakai
+sprite PNG pixel-art transparan dari lembar karakter referensi yang disetujui.
 
-![Preview animasi Dogi](new_frames_preview.png)
+![Sprite Dogi v0.5.0](qa/reference-sprites-v050-top.png)
 
 ## Aplikasi dan Control Center
 
@@ -22,8 +23,10 @@ sementara desktop pet tetap aktif.
 
 ## Fitur saat ini
 
-- Mata mengikuti kursor dan berkedip.
+- Animasi pixel-art empat frame yang tajam untuk tiap aksi utama.
 - Mengejar kursor yang bergerak cepat.
+- Menoleh mengikuti kursor; bila kursor digerakkan kanan-kiri berulang dengan
+  cepat, Dogi menjadi pusing lengkap dengan animasi spiral.
 - Ikut mengetik di laptop mini saat kamu mengetik.
 - Ikut menggerakkan indikator laptop saat kamu scroll ke atas atau bawah.
 - Mengenali jendela Zoom, Teams, Google Meet, Webex, dan call lain; Dogi
@@ -141,3 +144,13 @@ python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>
+
+### Mengimpor ulang lembar sprite
+
+Lembar sprite bersih disimpan di
+`assets/reference/dogi-clean-sprite-sheet-v050.png`. Untuk mengekstrak ulang
+seluruh animasi transparan dan enam variasi tema:
+
+```powershell
+python scripts/import_reference_sprites.py assets/reference/dogi-clean-sprite-sheet-v050.png
+```

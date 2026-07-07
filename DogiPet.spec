@@ -3,12 +3,16 @@
 from pathlib import Path
 
 root = Path(SPECPATH)
+sprite_datas = [
+    (str(path), str(path.parent.relative_to(root)))
+    for path in (root / "assets" / "sprites").rglob("*.png")
+]
 
 a = Analysis(
     [str(root / "dogi.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[(str(root / "assets" / "dogipet.png"), "assets")],
+    datas=[(str(root / "assets" / "dogipet.png"), "assets")] + sprite_datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

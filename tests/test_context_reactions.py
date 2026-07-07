@@ -68,6 +68,50 @@ class ContextFrameTests(unittest.TestCase):
         self.assertEqual(app.scroll_direction, -1)
 
 
+class CursorSwingTests(unittest.TestCase):
+    def test_repeated_horizontal_reversals_trigger_dizzy_once(self):
+        detector = dogi.CursorSwingDetector(
+            min_run=50, window=3.0, reversals=4, cooldown=8.0
+        )
+        triggered = []
+        for index, x in enumerate((100, 180, 100, 180, 100, 180)):
+            direction, dizzy = detector.update(x, index * 0.3)
+            triggered.append(dizzy)
+            if index:
+                self.assertIn(direction, (-1, 1))
+        self.assertEqual(triggered.count(True), 1)
+
+    def test_slow_or_short_cursor_jitter_does_not_trigger(self):
+        detector = dogi.CursorSwingDetector(
+            min_run=50, window=3.0, reversals=4, cooldown=8.0
+        )
+        results = [
+            detector.update(x, index * 0.4)[1]
+            for index, x in enumerate((100, 112, 101, 114, 102, 115, 103))
+        ]
+        self.assertFalse(any(results))
+
+    def test_app_turns_dogi_then_enters_dizzy_state(self):
+        observed = {"state": "idle", "message": ""}
+        pet = SimpleNamespace(
+            state="idle",
+            facing=1,
+            set_state=lambda state: (
+                observed.update(state=state), setattr(pet, "state", state)
+            ),
+            show_msg=lambda message, _seconds: observed.update(message=message),
+        )
+        app = dogi.DogiApp.__new__(dogi.DogiApp)
+        app.cursor_swing = dogi.CursorSwingDetector(
+            min_run=50, window=3.0, reversals=4, cooldown=8.0
+        )
+        app.pets = [pet]
+        for index, x in enumerate((100, 180, 100, 180, 100, 180)):
+            app._check_cursor_swing(index * 0.3, x)
+        self.assertEqual(observed["state"], "dizzy")
+        self.assertIn("pusing", observed["message"].lower())
+
+
 class MeetingReactionTests(unittest.TestCase):
     def test_new_meeting_faces_window_and_enters_alert(self):
         state = {"value": "idle", "message": ""}
