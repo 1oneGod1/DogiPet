@@ -1,0 +1,109 @@
+# DogiPet
+
+DogiPet adalah anjing piksel yang hidup di desktop Windows. Ia berjalan,
+tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
+istirahat, dan merayakan saat AI agent selesai bekerja.
+
+Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
+kode, suara, dan identitas Dogi sendiri.
+
+![Preview animasi Dogi](new_frames_preview.png)
+
+## Fitur saat ini
+
+- Mata mengikuti kursor dan berkedip.
+- Mengejar kursor yang bergerak cepat.
+- Bereaksi saat keyboard dipakai.
+- Klik untuk mengelus dan drag untuk memindahkan Dogi.
+- Beri tulang, tambah hingga empat Dogi, dan interaksi antarteman.
+- Enam tema warna bulu.
+- Timer Pomodoro dan pengingat peregangan.
+- Reaksi status AI agent melalui `dogi_hook.py`.
+- Installer Windows dengan pilihan startup.
+- Pembaruan aman dari GitHub Releases dengan verifikasi SHA-256.
+
+## Menjalankan dari VS Code
+
+Butuh Python 3.11 atau lebih baru.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python dogi.py
+```
+
+Klik kanan Dogi untuk membuka menu fitur dan pengaturan.
+
+## Build aplikasi Windows
+
+Build lokal membutuhkan dependency pengembangan dan Inno Setup 6.
+
+```powershell
+python -m pip install -r requirements-dev.txt
+.\scripts\build_windows.ps1
+```
+
+Hasil build:
+
+- `dist/DogiPet.exe` — executable mandiri.
+- `release/DogiPet-Setup.exe` — installer Windows.
+- `release/DogiPet-Setup.exe.sha256` — checksum updater.
+
+## Sistem pembaruan otomatis
+
+DogiPet memiliki dua kanal pembaruan:
+
+- `continuous` — setiap push kode ke branch `main` membuat ulang rolling
+  release `continuous`. Ini kanal default agar perubahan di GitHub segera
+  terdeteksi oleh aplikasi terpasang.
+- `stable` — hanya mengambil GitHub Release terbaru yang dibuat dari tag versi
+  seperti `v0.1.0`.
+
+Saat versi/build baru tersedia, DogiPet meminta konfirmasi, mengunduh installer,
+memverifikasi SHA-256, menjalankan installer secara senyap, lalu menutup proses
+lama. Kanal dan pemeriksaan otomatis dapat diubah melalui klik kanan →
+**Pembaruan**.
+
+### Membuat stable release
+
+1. Ubah `VERSION` di `version.py`.
+2. Commit dan push perubahan.
+3. Buat tag dengan versi yang sama.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Workflow `release.yml` akan menguji aplikasi, membangun installer Windows, dan
+menerbitkan aset yang diperlukan updater.
+
+## Integrasi AI agent
+
+Jalankan perintah berikut dari hook editor atau agent pilihanmu:
+
+```powershell
+python dogi_hook.py thinking
+python dogi_hook.py done
+```
+
+Status ditulis secara lokal ke `~/.dogi/agent_status.json`. Dogi tidak
+mengirim isi prompt, ketikan, atau data penggunaan ke server mana pun.
+
+## Data lokal
+
+Konfigurasi, suara sintetis, status agent, dan installer sementara tersimpan di
+`~/.dogi/`. File `config.json` menyimpan tema, pengingat peregangan, serta
+preferensi pembaruan.
+
+## Pengembangan
+
+Jalankan pemeriksaan sebelum commit:
+
+```powershell
+python -m unittest discover -s tests -v
+python -m py_compile dogi.py updater.py dogi_hook.py
+```
+
+Repository: <https://github.com/1oneGod1/DogiPet>

@@ -1,0 +1,61 @@
+name: Publish continuous update
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - "source-captures/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dogipet-continuous
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Read app version
+        shell: pwsh
+        run: |
+          "DOGIPET_VERSION=$(python -c 'from version import VERSION; print(VERSION)')" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build installer
+        shell: pwsh
+        run: |
+          python scripts/set_build_info.py --build-id "${{ github.sha }}"
+          python scripts/generate_assets.py
+          python -m PyInstaller --noconfirm --clean DogiPet.spec
+          dist\DogiPet.exe --smoke-test
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/DogiPet.iss
+          $hash = (Get-FileHash -Algorithm SHA256 release/DogiPet-Setup.exe).Hash.ToLowerInvariant()
+          Set-Content -Encoding ascii release/DogiPet-Setup.exe.sha256 "$hash  DogiPet-Setup.exe"
+          python scripts/write_release_manifest.py --version $env:DOGIPET_VERSION --build-id "${{ github.sha }}" --channel continuous
+      - name: Publish rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f continuous "${GITHUB_SHA}"
+          git push origin refs/tags/continuous --force
+          if gh release view continuous >/dev/null 2>&1; then
+            gh release upload continuous release/DogiPet-Setup.exe release/DogiPet-Setup.exe.sha256 release/build-info.json --clobber
+            gh release edit continuous --title "DogiPet Continuous" --notes "Automatic build from main at ${GITHUB_SHA}." --prerelease
+          else
+            gh release create continuous release/DogiPet-Setup.exe release/DogiPet-Setup.exe.sha256 release/build-info.json --title "DogiPet Continuous" --notes "Automatic build from main at ${GITHUB_SHA}." --prerelease
+          fi

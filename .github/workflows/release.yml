@@ -1,0 +1,49 @@
+name: Publish stable release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Validate tag and build metadata
+        shell: pwsh
+        run: |
+          $version = python -c "from version import VERSION; print(VERSION)"
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} tidak cocok dengan version.py ($version)."
+          }
+          "DOGIPET_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          python scripts/set_build_info.py --build-id "${{ github.sha }}"
+      - name: Build installer
+        shell: pwsh
+        run: |
+          python scripts/generate_assets.py
+          python -m PyInstaller --noconfirm --clean DogiPet.spec
+          dist\DogiPet.exe --smoke-test
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/DogiPet.iss
+          $hash = (Get-FileHash -Algorithm SHA256 release/DogiPet-Setup.exe).Hash.ToLowerInvariant()
+          Set-Content -Encoding ascii release/DogiPet-Setup.exe.sha256 "$hash  DogiPet-Setup.exe"
+          python scripts/write_release_manifest.py --version $env:DOGIPET_VERSION --build-id "${{ github.sha }}" --channel stable
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/DogiPet-Setup.exe release/DogiPet-Setup.exe.sha256 release/build-info.json --generate-notes --title "DogiPet ${GITHUB_REF_NAME}"
