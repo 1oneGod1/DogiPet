@@ -8,7 +8,7 @@ a = Analysis(
     [str(root / "dogi.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=[(str(root / "assets" / "dogipet.png"), "assets")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -37,4 +37,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=[str(root / "assets" / "dogipet.ico")],
+    version=str(root / "assets" / "version_info.txt"),
 )

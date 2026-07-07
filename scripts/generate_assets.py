@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dogi import COLOR_THEMES, FIXED_COLORS, IDLE_1  # noqa: E402
+from version import VERSION  # noqa: E402
 
 
 def main() -> None:
@@ -43,6 +44,40 @@ def main() -> None:
     image.save(
         assets / "dogipet.ico",
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
+
+    version_parts = [int(part) for part in VERSION.split(".")]
+    version_parts.extend([0] * (4 - len(version_parts)))
+    version_tuple = tuple(version_parts[:4])
+    (assets / "version_info.txt").write_text(
+        f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={version_tuple},
+    prodvers={version_tuple},
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', '1oneGod1'),
+        StringStruct('FileDescription', 'DogiPet Desktop Companion'),
+        StringStruct('FileVersion', '{VERSION}'),
+        StringStruct('InternalName', 'DogiPet'),
+        StringStruct('OriginalFilename', 'DogiPet.exe'),
+        StringStruct('ProductName', 'DogiPet'),
+        StringStruct('ProductVersion', '{VERSION}')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+""",
+        encoding="utf-8",
     )
 
 

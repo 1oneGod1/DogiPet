@@ -9,6 +9,15 @@ kode, suara, dan identitas Dogi sendiri.
 
 ![Preview animasi Dogi](new_frames_preview.png)
 
+## Aplikasi dan Control Center
+
+DogiPet bukan sekadar script Python. Repository ini menghasilkan aplikasi
+Windows `DogiPet.exe` dan installer `DogiPet-Setup.exe`. Saat aplikasi dibuka,
+Control Center native tampil untuk mengatur Dogi; jendela bisa disembunyikan
+sementara desktop pet tetap aktif.
+
+![DogiPet Control Center](qa/control-center-v020.png)
+
 ## Fitur saat ini
 
 - Mata mengikuti kursor dan berkedip.
@@ -19,6 +28,8 @@ kode, suara, dan identitas Dogi sendiri.
 - Enam tema warna bulu.
 - Timer Pomodoro dan pengingat peregangan.
 - Reaksi status AI agent melalui `dogi_hook.py`.
+- Control Center native untuk preview, aksi cepat, personalisasi, fokus, dan
+  pengaturan pembaruan.
 - Installer Windows dengan pilihan startup.
 - Pembaruan aman dari GitHub Releases dengan verifikasi SHA-256.
 
@@ -72,8 +83,8 @@ lama. Kanal dan pemeriksaan otomatis dapat diubah melalui klik kanan →
 3. Buat tag dengan versi yang sama.
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Workflow `release.yml` akan menguji aplikasi, membangun installer Windows, dan

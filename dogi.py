@@ -39,6 +39,7 @@ import threading
 import pathlib
 import webbrowser
 
+from build_info import BUILD_ID
 from updater import RELEASE_PAGE, UpdateInfo, UpdateManager, launch_installer
 from version import VERSION
 
@@ -694,11 +695,20 @@ class DogiPet:
     def _set_theme(self, name):
         self.theme = name
         if self.primary:
+            self.app.theme = name
             self.app.save_config()
+            if getattr(self.app, "control_center", None):
+                self.app.control_center.sync_from_app()
 
     def _on_menu(self, e):
         app = self.app
         menu = tk.Menu(self.win, tearoff=0)
+
+        menu.add_command(
+            label="OPEN CONTROL CENTER",
+            command=app.show_control_center,
+        )
+        menu.add_separator()
 
         warna = tk.Menu(menu, tearoff=0)
         for name in COLOR_THEMES:
@@ -782,9 +792,573 @@ class DogiPet:
             pass
 
 
+# -------------------------------------------------------------- control center
+class ControlCenter:
+    """Jendela pengaturan native yang mengendalikan desktop pet."""
+
+    BG = "#090909"
+    PANEL = "#151515"
+    PANEL_ALT = "#1e1e1e"
+    BORDER = "#383838"
+    TEXT = "#f5f2e9"
+    MUTED = "#929292"
+    ACCENT = "#f2cf45"
+    DARK = "#090909"
+
+    def __init__(self, app):
+        self.app = app
+        self.win = tk.Toplevel(app.root)
+        self.win.title("DogiPet Control Center")
+        self.win.configure(bg=self.BG)
+        self.win.resizable(False, False)
+        self.win.protocol("WM_DELETE_WINDOW", self.hide)
+        try:
+            self._window_icon = tk.PhotoImage(
+                file=str(pathlib.Path(__file__).resolve().parent / "assets" / "dogipet.png")
+            )
+            self.win.iconphoto(True, self._window_icon)
+        except tk.TclError:
+            self._window_icon = None
+
+        self.name_var = tk.StringVar(value=app.pet_name)
+        self.status_var = tk.StringVar(value="DOGI AKTIF DI DESKTOP")
+        self.pomodoro_var = tk.StringVar(value="SIAP UNTUK SESI FOKUS")
+        self.theme_var = tk.StringVar(value=app.theme)
+
+        self.pages = {}
+        self.nav_buttons = {}
+        self.theme_buttons = {}
+        self._build_shell()
+        self._build_home_page()
+        self._build_customize_page()
+        self._build_focus_page()
+        self._build_updates_page()
+        self._build_about_page()
+        self.show_page("HOME")
+        self.win.update_idletasks()
+        natural_width = self.win.winfo_reqwidth()
+        natural_height = self.win.winfo_reqheight()
+        x = max(20, (self.app.screen_w - natural_width) // 2)
+        y = max(20, (self.app.screen_h - natural_height) // 2)
+        self.win.geometry(f"+{x}+{y}")
+        self.sync_from_app()
+        self.win.withdraw()
+        self.win.after(500, self._refresh_loop)
+
+    def _label(self, parent, text="", size=10, color=None, bold=False, **kwargs):
+        return tk.Label(
+            parent,
+            text=text,
+            bg=kwargs.pop("bg", parent.cget("bg")),
+            fg=color or self.TEXT,
+            font=("Consolas", size, "bold" if bold else "normal"),
+            **kwargs,
+        )
+
+    def _button(self, parent, text, command, accent=False, width=24, **kwargs):
+        bg = self.ACCENT if accent else self.PANEL_ALT
+        fg = self.DARK if accent else self.TEXT
+        active_bg = "#ffe474" if accent else "#2b2b2b"
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            bg=bg,
+            fg=fg,
+            activebackground=active_bg,
+            activeforeground=self.DARK if accent else self.TEXT,
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            font=("Consolas", 10, "bold"),
+            padx=12,
+            pady=10,
+            **kwargs,
+        )
+
+    def _card(self, parent, **kwargs):
+        return tk.Frame(
+            parent,
+            bg=self.PANEL,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            **kwargs,
+        )
+
+    def _build_shell(self):
+        header = tk.Frame(self.win, bg=self.BG, height=76)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        brand = tk.Frame(header, bg=self.BG)
+        brand.pack(side="left", padx=24, pady=14)
+        self._label(brand, "DOGIPET", 22, bold=True).pack(anchor="w")
+        self._label(
+            brand,
+            f"TEMAN DESKTOP  /  VERSI {VERSION}",
+            8,
+            self.MUTED,
+        ).pack(anchor="w")
+
+        right = tk.Frame(header, bg=self.BG)
+        right.pack(side="right", padx=24, pady=17)
+        self._label(
+            right,
+            textvariable=self.status_var,
+            size=9,
+            color=self.ACCENT,
+            bold=True,
+        ).pack(side="left", padx=(0, 18))
+        self._button(
+            right,
+            "SEMBUNYIKAN",
+            self.hide,
+            width=18,
+        ).pack(side="left")
+
+        divider = tk.Frame(self.win, bg=self.BORDER, height=1)
+        divider.pack(fill="x")
+
+        body = tk.Frame(self.win, bg=self.BG)
+        body.pack(fill="both", expand=True)
+
+        sidebar = tk.Frame(body, bg=self.BG, width=196)
+        sidebar.pack(side="left", fill="y", padx=(18, 0), pady=18)
+        sidebar.pack_propagate(False)
+
+        self._label(sidebar, "PUSAT KONTROL", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=10, pady=(4, 12)
+        )
+        for page, label in (
+            ("HOME", "BERANDA"),
+            ("CUSTOMIZE", "TAMPILAN"),
+            ("FOCUS", "FOKUS"),
+            ("UPDATES", "PEMBARUAN"),
+            ("ABOUT", "TENTANG"),
+        ):
+            button = self._button(
+                sidebar,
+                label,
+                lambda name=page: self.show_page(name),
+                width=20,
+                anchor="w",
+            )
+            button.pack(fill="x", pady=3)
+            self.nav_buttons[page] = button
+
+        self._label(
+            sidebar,
+            "KLIK KANAN DOGI UNTUK\nMEMBUKA JENDELA INI LAGI",
+            8,
+            self.MUTED,
+            justify="left",
+        ).pack(side="bottom", anchor="w", padx=10, pady=8)
+
+        self.content = tk.Frame(body, bg=self.BG, width=680, height=520)
+        self.content.pack(side="left", fill="both", expand=True, padx=18, pady=18)
+        self.content.pack_propagate(False)
+
+    def _new_page(self, name, title, subtitle):
+        page = tk.Frame(self.content, bg=self.BG)
+        self.pages[name] = page
+        self._label(page, title, 19, bold=True).pack(anchor="w")
+        self._label(page, subtitle, 9, self.MUTED).pack(anchor="w", pady=(2, 16))
+        return page
+
+    def _build_home_page(self):
+        page = self._new_page(
+            "HOME",
+            "DOGI SIAP MENEMANIMU.",
+            "Teman kecilmu sedang aktif di desktop.",
+        )
+        columns = tk.Frame(page, bg=self.BG)
+        columns.pack(fill="both", expand=True)
+
+        preview_card = self._card(columns, width=360)
+        preview_card.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        preview_card.pack_propagate(False)
+        self._label(preview_card, "PREVIEW LANGSUNG", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 0)
+        )
+        self.preview = tk.Canvas(
+            preview_card,
+            width=320,
+            height=245,
+            bg=self.PANEL,
+            highlightthickness=0,
+        )
+        self.preview.pack(padx=16)
+        self.preview_name = self._label(preview_card, self.app.pet_name.upper(), 14, bold=True)
+        self.preview_name.pack()
+        self._label(
+            preview_card,
+            "KLIK DAN SERET DI DESKTOP  /  KLIK KANAN UNTUK MENU",
+            7,
+            self.MUTED,
+        ).pack(pady=(5, 12))
+
+        actions = self._card(columns, width=280)
+        actions.pack(side="left", fill="y")
+        actions.pack_propagate(False)
+        self._label(actions, "AKSI CEPAT", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(18, 12)
+        )
+        for text, command, accent in (
+            ("ELUS DOGI", self._pet_primary, True),
+            ("BERI TULANG", self.app.spawn_bone, False),
+            ("TAMBAH TEMAN", self.app.add_pet, False),
+            ("TIDURKAN DOGI", self._sleep_primary, False),
+        ):
+            self._button(actions, text, command, accent=accent, width=24).pack(
+                padx=18, pady=5, fill="x"
+            )
+        self.pet_count_label = self._label(actions, "", 8, self.MUTED)
+        self.pet_count_label.pack(side="bottom", pady=18)
+
+    def _build_customize_page(self):
+        page = self._new_page(
+            "CUSTOMIZE",
+            "BUAT DOGI JADI MILIKMU.",
+            "Pilih nama dan warna bulu yang paling pas.",
+        )
+
+        name_card = self._card(page)
+        name_card.pack(fill="x", pady=(0, 12))
+        self._label(name_card, "NAMA DOGI", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(14, 6)
+        )
+        name_row = tk.Frame(name_card, bg=self.PANEL)
+        name_row.pack(fill="x", padx=18, pady=(0, 16))
+        entry = tk.Entry(
+            name_row,
+            textvariable=self.name_var,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            relief="flat",
+            font=("Consolas", 12, "bold"),
+            width=28,
+        )
+        entry.pack(side="left", ipady=9, padx=(0, 10))
+        self._button(name_row, "SIMPAN NAMA", self._save_name, accent=True, width=16).pack(
+            side="left"
+        )
+
+        theme_card = self._card(page)
+        theme_card.pack(fill="both", expand=True)
+        self._label(theme_card, "WARNA BULU", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(14, 4)
+        )
+        self._label(
+            theme_card,
+            "Perubahan warna langsung diterapkan ke Dogi utama.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+        grid = tk.Frame(theme_card, bg=self.PANEL)
+        grid.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        for index, name in enumerate(COLOR_THEMES):
+            swatch = COLOR_THEMES[name]["o"]
+            button = tk.Button(
+                grid,
+                text=name.upper(),
+                command=lambda value=name: self._select_theme(value),
+                bg=self.PANEL_ALT,
+                fg=swatch,
+                activebackground="#2b2b2b",
+                activeforeground=swatch,
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                font=("Consolas", 11, "bold"),
+                padx=14,
+                pady=16,
+                anchor="w",
+            )
+            button.grid(row=index // 2, column=index % 2, padx=4, pady=4, sticky="ew")
+            self.theme_buttons[name] = button
+        grid.grid_columnconfigure(0, weight=1)
+        grid.grid_columnconfigure(1, weight=1)
+
+    def _build_focus_page(self):
+        page = self._new_page(
+            "FOCUS",
+            "FOKUS. ISTIRAHAT. ULANGI.",
+            "Dogi menjaga waktu fokus dan mengingatkanmu beristirahat.",
+        )
+
+        pomo = self._card(page)
+        pomo.pack(fill="x", pady=(0, 12))
+        self._label(pomo, "TIMER POMODORO", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 4)
+        )
+        self._label(
+            pomo,
+            textvariable=self.pomodoro_var,
+            size=18,
+            color=self.TEXT,
+            bold=True,
+        ).pack(anchor="w", padx=18, pady=(4, 12))
+        self.pomo_button = self._button(
+            pomo,
+            "MULAI 25 MENIT",
+            self.app.toggle_pomodoro,
+            accent=True,
+            width=24,
+        )
+        self.pomo_button.pack(anchor="w", padx=18, pady=(0, 18))
+
+        habits = self._card(page)
+        habits.pack(fill="both", expand=True)
+        self._label(habits, "KEBIASAAN SEHAT", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 10)
+        )
+        row = tk.Frame(habits, bg=self.PANEL)
+        row.pack(fill="x", padx=18, pady=8)
+        copy = tk.Frame(row, bg=self.PANEL)
+        copy.pack(side="left", fill="x", expand=True)
+        self._label(copy, "PENGINGAT PEREGANGAN", 11, bold=True).pack(anchor="w")
+        self._label(copy, "Dogi mengingatkanmu setiap 45 menit.", 8, self.MUTED).pack(
+            anchor="w", pady=(3, 0)
+        )
+        self.stretch_button = self._button(
+            row,
+            "",
+            self.app.toggle_stretch,
+            width=12,
+        )
+        self.stretch_button.pack(side="right")
+
+    def _build_updates_page(self):
+        page = self._new_page(
+            "UPDATES",
+            "DOGI SELALU TERBARU.",
+            "Pembaruan dikirim langsung dari GitHub Releases milikmu.",
+        )
+
+        current = self._card(page)
+        current.pack(fill="x", pady=(0, 12))
+        current_left = tk.Frame(current, bg=self.PANEL)
+        current_left.pack(side="left", padx=18, pady=16)
+        self._label(current_left, "VERSI TERPASANG", 8, self.MUTED, bold=True).pack(
+            anchor="w"
+        )
+        build_label = BUILD_ID[:8] if BUILD_ID != "source" else "LOCAL SOURCE"
+        self._label(current_left, f"{VERSION}  /  {build_label}", 16, bold=True).pack(
+            anchor="w", pady=(4, 0)
+        )
+        self._button(
+            current,
+            "PERIKSA SEKARANG",
+            lambda: self.app.check_updates(manual=True),
+            accent=True,
+            width=16,
+        ).pack(side="right", padx=18)
+
+        settings = self._card(page)
+        settings.pack(fill="both", expand=True)
+        self._label(settings, "PENGATURAN PEMBARUAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 12)
+        )
+
+        auto_row = tk.Frame(settings, bg=self.PANEL)
+        auto_row.pack(fill="x", padx=18, pady=6)
+        auto_copy = tk.Frame(auto_row, bg=self.PANEL)
+        auto_copy.pack(side="left", fill="x", expand=True)
+        self._label(auto_copy, "PEMERIKSAAN OTOMATIS", 10, bold=True).pack(anchor="w")
+        self._label(auto_copy, "Periksa diam-diam setelah DogiPet dimulai.", 8, self.MUTED).pack(
+            anchor="w"
+        )
+        self.auto_button = self._button(
+            auto_row,
+            "",
+            self.app.toggle_auto_update,
+            width=12,
+        )
+        self.auto_button.pack(side="right")
+
+        self._label(settings, "KANAL PEMBARUAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(22, 8)
+        )
+        channel_row = tk.Frame(settings, bg=self.PANEL)
+        channel_row.pack(fill="x", padx=18)
+        self.continuous_button = self._button(
+            channel_row,
+            "CONTINUOUS",
+            lambda: self.app.set_update_channel("continuous"),
+            width=18,
+        )
+        self.continuous_button.pack(side="left", padx=(0, 8))
+        self.stable_button = self._button(
+            channel_row,
+            "STABLE",
+            lambda: self.app.set_update_channel("stable"),
+            width=18,
+        )
+        self.stable_button.pack(side="left")
+        self._label(
+            settings,
+            "CONTINUOUS mengikuti setiap push ke main. STABLE mengikuti tag versi.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", padx=18, pady=(8, 0))
+
+    def _build_about_page(self):
+        page = self._new_page(
+            "ABOUT",
+            "ANJING KECIL DENGAN TUGAS BESAR.",
+            "Dibangun sebagai aplikasi teman desktop Windows sungguhan.",
+        )
+        card = self._card(page)
+        card.pack(fill="both", expand=True)
+        self._label(card, "DOGIPET", 26, bold=True).pack(anchor="w", padx=24, pady=(26, 4))
+        self._label(card, f"VERSI {VERSION}", 9, self.ACCENT, bold=True).pack(
+            anchor="w", padx=24
+        )
+        self._label(
+            card,
+            "Anjing piksel yang mengikuti kursor, bereaksi saat kamu mengetik,\n"
+            "menjalankan timer fokus, dan merayakan tugas AI yang selesai.",
+            10,
+            self.TEXT,
+            justify="left",
+        ).pack(anchor="w", padx=24, pady=(22, 18))
+        self._label(
+            card,
+            "TANPA PELACAKAN  /  KONFIGURASI LOKAL  /  UPDATE GITHUB",
+            8,
+            self.MUTED,
+            bold=True,
+        ).pack(anchor="w", padx=24)
+        self._button(
+            card,
+            "BUKA GITHUB",
+            lambda: webbrowser.open("https://github.com/1oneGod1/DogiPet"),
+            accent=True,
+            width=18,
+        ).pack(anchor="w", padx=24, pady=28)
+
+    def show_page(self, name):
+        for page in self.pages.values():
+            page.pack_forget()
+        self.pages[name].pack(fill="both", expand=True)
+        for page_name, button in self.nav_buttons.items():
+            active = page_name == name
+            button.configure(
+                bg=self.ACCENT if active else self.PANEL_ALT,
+                fg=self.DARK if active else self.TEXT,
+                activebackground="#ffe474" if active else "#2b2b2b",
+            )
+
+    def _draw_preview(self):
+        self.preview.delete("all")
+        frame = IDLE_1
+        scale = 13
+        width = len(frame[0]) * scale
+        height = len(frame) * scale
+        ox = (int(self.preview.cget("width")) - width) // 2
+        oy = (int(self.preview.cget("height")) - height) // 2
+        palette = dict(FIXED_COLORS)
+        palette.update(COLOR_THEMES[self.app.theme])
+        for y, row in enumerate(frame):
+            for x, key in enumerate(row):
+                color = palette.get(key)
+                if color:
+                    self.preview.create_rectangle(
+                        ox + x * scale,
+                        oy + y * scale,
+                        ox + (x + 1) * scale,
+                        oy + (y + 1) * scale,
+                        fill=color,
+                        outline=color,
+                    )
+
+    def _pet_primary(self):
+        if self.app.pets:
+            self.app.pets[0].set_state("happy")
+            self.app.pets[0].show_msg("Senang!", 2)
+
+    def _sleep_primary(self):
+        if self.app.pets:
+            self.app.pets[0].set_state("sleep")
+
+    def _save_name(self):
+        name = self.name_var.get().strip()[:24] or "Dogi"
+        self.app.pet_name = name
+        self.name_var.set(name)
+        self.app.save_config()
+        self.preview_name.configure(text=name.upper())
+        if self.app.pets:
+            self.app.pets[0].show_msg(f"Namaku {name}!", 3)
+
+    def _select_theme(self, name):
+        if not self.app.pets:
+            return
+        self.app.theme = name
+        self.app.pets[0]._set_theme(name)
+        self.theme_var.set(name)
+        self.sync_from_app()
+
+    def sync_from_app(self):
+        self.preview_name.configure(text=self.app.pet_name.upper())
+        self._draw_preview()
+        self.pet_count_label.configure(text=f"{len(self.app.pets)} / {MAX_PETS} DOGI AKTIF")
+        for name, button in self.theme_buttons.items():
+            selected = name == self.app.theme
+            button.configure(
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else COLOR_THEMES[name]["o"],
+            )
+        self.stretch_button.configure(
+            text="ON" if self.app.stretch_on else "OFF",
+            bg=self.ACCENT if self.app.stretch_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.stretch_on else self.TEXT,
+        )
+        self.auto_button.configure(
+            text="ON" if self.app.auto_update else "OFF",
+            bg=self.ACCENT if self.app.auto_update else self.PANEL_ALT,
+            fg=self.DARK if self.app.auto_update else self.TEXT,
+        )
+        continuous = self.app.update_channel == "continuous"
+        self.continuous_button.configure(
+            bg=self.ACCENT if continuous else self.PANEL_ALT,
+            fg=self.DARK if continuous else self.TEXT,
+        )
+        self.stable_button.configure(
+            bg=self.ACCENT if not continuous else self.PANEL_ALT,
+            fg=self.DARK if not continuous else self.TEXT,
+        )
+
+    def _refresh_loop(self):
+        try:
+            if self.app.pomo_end:
+                remaining = max(0, int(self.app.pomo_end - time.time()))
+                self.pomodoro_var.set(f"TERSISA {remaining // 60:02d}:{remaining % 60:02d}")
+                self.pomo_button.configure(text="BATALKAN TIMER", bg=self.PANEL_ALT, fg=self.TEXT)
+            else:
+                self.pomodoro_var.set("SIAP UNTUK SESI FOKUS")
+                self.pomo_button.configure(text="MULAI 25 MENIT", bg=self.ACCENT, fg=self.DARK)
+            self.pet_count_label.configure(text=f"{len(self.app.pets)} / {MAX_PETS} DOGI AKTIF")
+            self.sync_from_app()
+            self.win.after(750, self._refresh_loop)
+        except tk.TclError:
+            return
+
+    def show(self):
+        self.sync_from_app()
+        self.win.deiconify()
+        self.win.lift()
+        self.win.focus_force()
+
+    def hide(self):
+        self.win.withdraw()
+
+
 # ------------------------------------------------------------- aplikasi utama
 class DogiApp:
-    def __init__(self):
+    def __init__(self, smoke_test=False):
+        self.smoke_test = smoke_test
         self.root = tk.Tk()
         self.root.withdraw()  # root disembunyikan; tiap Dogi punya jendela
 
@@ -816,6 +1390,9 @@ class DogiApp:
         self.update_channel = "continuous"
         self.update_manager = UpdateManager()
         self._installer_pending = None
+        self.pet_name = "Dogi"
+        self.show_control_center_on_start = True
+        self.control_center = None
 
         self.theme = "Shiba"
         self._load_config()
@@ -833,8 +1410,11 @@ class DogiApp:
             )
         ]
         self.bones = []
+        self.control_center = ControlCenter(self)
 
         self.root.after(TICK_MS, self._tick)
+        if self.show_control_center_on_start and not self.smoke_test:
+            self.root.after(250, self.show_control_center)
         if self.auto_update and getattr(sys, "frozen", False):
             self.root.after(3500, self.check_updates)
 
@@ -848,6 +1428,10 @@ class DogiApp:
             self.auto_update = bool(cfg.get("auto_update", True))
             if cfg.get("update_channel") in ("stable", "continuous"):
                 self.update_channel = cfg["update_channel"]
+            self.pet_name = str(cfg.get("pet_name") or "Dogi")[:24]
+            self.show_control_center_on_start = bool(
+                cfg.get("show_control_center_on_start", True)
+            )
         except Exception:
             pass
 
@@ -862,6 +1446,8 @@ class DogiApp:
                         "stretch": self.stretch_on,
                         "auto_update": self.auto_update,
                         "update_channel": self.update_channel,
+                        "pet_name": self.pet_name,
+                        "show_control_center_on_start": self.show_control_center_on_start,
                     },
                     indent=2,
                 ),
@@ -916,11 +1502,15 @@ class DogiApp:
                 self.pets[0].show_msg(
                     f"Fokus {POMODORO_MIN} menit dimulai!", 4
                 )
+        if self.control_center:
+            self.control_center.sync_from_app()
 
     def toggle_stretch(self):
         self.stretch_on = not self.stretch_on
         self.last_stretch = time.time()
         self.save_config()
+        if self.control_center:
+            self.control_center.sync_from_app()
 
     def toggle_auto_update(self):
         self.auto_update = not self.auto_update
@@ -928,6 +1518,8 @@ class DogiApp:
         if self.pets:
             status = "aktif" if self.auto_update else "nonaktif"
             self.pets[0].show_msg(f"Auto-update {status}", 3)
+        if self.control_center:
+            self.control_center.sync_from_app()
 
     def set_update_channel(self, channel):
         if channel not in ("stable", "continuous"):
@@ -936,7 +1528,13 @@ class DogiApp:
         self.save_config()
         if self.pets:
             self.pets[0].show_msg(f"Kanal: {channel}", 3)
+        if self.control_center:
+            self.control_center.sync_from_app()
         self.check_updates(manual=True)
+
+    def show_control_center(self):
+        if self.control_center:
+            self.control_center.show()
 
     def check_updates(self, manual=False):
         started = self.update_manager.check_async(
@@ -999,6 +1597,8 @@ class DogiApp:
             or list(COLOR_THEMES)
         x = random.randint(40, max(41, self.screen_w - CANVAS_W - 40))
         self.pets.append(DogiPet(self, x, random.choice(pool)))
+        if self.control_center:
+            self.control_center.sync_from_app()
 
     def remove_pet(self, pet):
         if len(self.pets) <= 1:
@@ -1007,6 +1607,9 @@ class DogiApp:
         self.pets.remove(pet)
         if pet.primary and self.pets:
             self.pets[0].primary = True
+            self.theme = self.pets[0].theme
+        if self.control_center:
+            self.control_center.sync_from_app()
 
     def spawn_bone(self):
         if len(self.bones) >= 3 or not self.pets:
@@ -1089,7 +1692,8 @@ class DogiApp:
 
 
 if __name__ == "__main__":
-    application = DogiApp()
-    if "--smoke-test" in sys.argv:
+    is_smoke_test = "--smoke-test" in sys.argv
+    application = DogiApp(smoke_test=is_smoke_test)
+    if is_smoke_test:
         application.root.after(1200, application.quit)
     application.run()

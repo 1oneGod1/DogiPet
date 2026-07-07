@@ -1,65 +1,79 @@
-# Design QA — DogiPet 0.1.0
+# Design QA — DogiPet 0.2.0
 
 **Source visual truth**
 
-- `new_frames_preview.png` — sprite Dogi yang disediakan dalam ZIP.
-- `I:/apps anjing/source-captures/comnyang-desktop.png` — referensi konsep dan daftar perilaku produk, bukan aset yang disalin.
+- `I:/apps anjing/source-captures/comnyang-desktop.png` — referensi bahasa
+  visual: hitam, putih, aksen kuning, tipografi pixel, border tipis, dan layout
+  kartu yang tegas.
+- `new_frames_preview.png` — sprite Dogi asli dari ZIP pengguna.
 
 **Implementation evidence**
 
-- `qa/implementation-dogipet.png` — jendela dari executable PyInstaller yang sedang berjalan.
-- `qa/comparison.png` — sprite sumber dan hasil executable dalam satu gambar perbandingan.
+- `qa/control-center-v020.png` — Control Center native yang sedang berjalan.
+- `qa/control-center-comparison.png` — referensi dan implementasi dalam satu
+  gambar perbandingan.
+- `qa/implementation-dogipet.png` — desktop pet dari executable.
 
 **Viewport and state**
 
-- Windows 11, scaling 125%.
-- Jendela logis Tkinter 230 × 96 px; hasil `PrintWindow` 184 × 77 physical px.
-- Tema Shiba, state idle, menghadap kanan.
+- Windows 11, display scaling 125%, 948 × 680 physical px.
+- Halaman Beranda, tema Shiba, satu Dogi aktif.
 
 **Full-view comparison evidence**
 
-Komposisi karakter, siluet, warna Shiba, outline cokelat, moncong krem,
-mata, hidung, dan lidah konsisten dengan sprite sumber. Area hitam pada capture
-adalah representasi transparansi oleh `PrintWindow`; saat aplikasi tampil di
-desktop Windows, warna transparan tidak terlihat.
+Control Center memakai komposisi hitam dominan, putih hangat, aksen kuning,
+tipografi monospace tebal, border abu tipis, dan kartu persegi yang konsisten
+dengan referensi. Implementasi tidak menyalin logo atau aset Comnyang; karakter,
+ikon, dan identitas tetap DogiPet.
 
 **Focused region comparison evidence**
 
-Tidak diperlukan crop tambahan karena seluruh aset karakter hanya 16 × 12
-pixel dan semua detail utama sudah terbaca pada `qa/comparison.png`.
+`qa/control-center-comparison.png` memperlihatkan header, hierarki judul,
+penggunaan aksen, karakter pixel, sidebar, dan tombol aksi pada ukuran yang
+cukup untuk menilai detail utama. Tidak diperlukan crop tambahan.
 
 ## Findings
 
 - Tidak ada temuan P0, P1, atau P2.
-- [P3] Capture native tidak dapat memperlihatkan transparansi desktop.
-  Ini keterbatasan metode capture, bukan perbedaan pada aplikasi yang berjalan.
+- [P3] Control Center memakai Consolas sebagai font pixel-native terdekat agar
+  tidak menambah font eksternal ke installer. Bentuknya sedikit lebih tipis
+  daripada display font pada situs referensi, tetapi hierarki dan keterbacaan
+  tetap kuat.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: bubble memakai Consolas bold agar tetap selaras dengan
-  karakter pixel; tidak ada bubble pada state idle yang dibandingkan.
-- Spacing and layout rhythm: sprite tetap memakai grid 16 × 12, scale 5,
-  dengan ruang bubble 36 px seperti implementasi sumber.
-- Colors and visual tokens: tema Shiba dan fixed colors berasal langsung dari
-  palet prototype ZIP.
-- Image quality and asset fidelity: sprite dirender sebagai blok pixel tanpa
-  smoothing; ikon aplikasi dibuat dari frame Dogi yang sama, bukan aset generik.
-- Copy and content: label menu, pesan Pomodoro, peregangan, updater, dan status
-  agent menggunakan Bahasa Indonesia yang konsisten.
+- Fonts and typography: Consolas bold untuk display dan kontrol; hierarchy,
+  wrapping, line-height, serta kontras terbaca pada 125% scaling.
+- Spacing and layout rhythm: sidebar 196 px, content 680 px, kartu dan gap 12 px,
+  serta header 76 px membentuk ritme yang konsisten tanpa clipping.
+- Colors and visual tokens: latar `#090909`, panel `#151515`, border `#383838`,
+  teks `#f5f2e9`, aksen `#f2cf45`.
+- Image quality and asset fidelity: preview memakai frame Dogi asli 16 × 12 dan
+  nearest-neighbor pixel blocks, bukan placeholder atau aset generik.
+- Copy and content: seluruh UI utama memakai Bahasa Indonesia; nama channel
+  GitHub tetap mengikuti istilah teknis `CONTINUOUS` dan `STABLE`.
+
+## Interactions verified
+
+- Navigasi Beranda, Tampilan, Fokus, Pembaruan, dan Tentang.
+- Simpan nama, ganti warna, elus, beri tulang, tambah teman, dan tidur.
+- Pomodoro, pengingat peregangan, auto-update, channel update, dan cek update.
+- Sembunyikan Control Center dan buka kembali melalui klik kanan Dogi.
 
 ## Patches made during QA
 
-- Menambahkan DPI awareness agar koordinat kursor dan posisi Dogi konsisten pada
-  Windows dengan display scaling.
-- Menyesuaikan callback `pynput` 1.8.2 untuk parameter event Windows terbaru.
-- Menambahkan smoke-test mode untuk memvalidasi executable dan hasil installer.
-- Menambahkan ikon hasil render sprite Dogi ke executable dan installer.
+- Memperbaiki capture DPI-aware agar evaluasi tidak salah menganggap panel
+  kanan terpotong pada display scaling 125%.
+- Menambahkan ikon Dogi nyata ke title bar dan bundle PyInstaller.
+- Mengganti copy Control Center ke Bahasa Indonesia.
+- Menghapus glyph swatch dan mempertahankan warna tema sebagai state tombol.
 
 ## Verification
 
-- 5 unit test updater lulus.
-- Python compilation lulus.
-- PyInstaller executable smoke test lulus.
+- Unit test updater lulus.
+- Source smoke test dan Control Center interaction test lulus.
+- Capture berasal dari `DogiPet.exe` hasil PyInstaller, bukan source preview.
 - Installer, aplikasi hasil instalasi, dan uninstaller smoke test lulus.
+- Visual comparison tidak memiliki mismatch P0/P1/P2.
 
 final result: passed
