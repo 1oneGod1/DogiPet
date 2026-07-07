@@ -1,4 +1,4 @@
-# Design QA — DogiPet 0.5.3
+# Design QA — DogiPet 0.5.4
 
 **Source visual truth**
 
@@ -19,8 +19,10 @@
 - `qa/think-animation-v052.png` — urutan ping-pong bingung yang dipakai app.
 - `qa/walk-right-v052.png` dan `qa/run-right-v052.png` — frame sumber-kiri
   setelah dicerminkan untuk gerakan ke kanan.
-- `qa/type-animation-v053.png` — strip mengetik baru dengan delapan frame,
+- `qa/type-animation-v054.png` — strip mengetik baru dengan delapan frame,
   tubuh/laptop stabil, paw bergantian, dan pose penutup sama dengan pose awal.
+- `qa/behaviors-v054.png` — empat tingkah spontan baru: curious, tail wag,
+  beg, dan zoomies.
 
 **Viewport and state**
 
@@ -73,6 +75,11 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
   target atau kursor tidak dapat membuat sprite tampak berjalan mundur.
 - Mengetik memakai delapan frame konsisten dan mempertahankan state `type`
   selama input aktif, tanpa satu frame idle saat timer internal diperbarui.
+- Laptop dibangun ulang pada grid 32 × 28: screen 4 × 8 logical px dan base
+  keyboard 9 × 3 logical px; seluruh frame memiliki padding kanan dan tidak
+  menyentuh batas canvas.
+- Empat behavior baru ikut scheduler kebutuhan/jam, tersedia di menu klik
+  kanan, dan tetap dapat diinterupsi input, meeting, drag, atau agent.
 - Empat pembalikan dengan lintasan minimal 55 px dalam 2,6 detik memicu state
   `dizzy` selama sekitar 4,8 detik.
 - Gerakan kecil/jitter tidak memicu pusing dan cooldown delapan detik mencegah
@@ -84,11 +91,11 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 48 unit test lulus, termasuk detektor gesture, false-positive jitter,
+- 51 unit test lulus, termasuk detektor gesture, false-positive jitter,
   integrasi state pusing, kelengkapan 816 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan
   uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.3`.
+- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.4`.
 
 final result: passed

@@ -33,6 +33,23 @@ class ReferenceSpriteTests(unittest.TestCase):
             Image.open(root / "type_7.png").tobytes(),
         )
 
+    def test_typing_laptop_has_complete_screen_and_keyboard_base(self):
+        root = ROOT / "assets" / "sprites" / "coklat"
+        for index in range(8):
+            image = Image.open(root / f"type_{index}.png").convert("RGBA")
+            with self.subTest(frame=index):
+                # Logical laptop base is x=21..29, y=25..27 at SCALE=5.
+                self.assertNotEqual(image.getpixel((110, 130))[3], 0)
+                self.assertNotEqual(image.getpixel((145, 135))[3], 0)
+                self.assertNotEqual(image.getpixel((135, 110))[3], 0)
+                self.assertLess(image.getbbox()[2], image.width)
+
+    def test_extra_behaviors_map_to_existing_animation_assets(self):
+        self.assertEqual(dogi.sprite_asset_state("curious"), "think")
+        self.assertEqual(dogi.sprite_asset_state("tail_wag"), "dig")
+        self.assertEqual(dogi.sprite_asset_state("beg"), "happy")
+        self.assertEqual(dogi.sprite_asset_state("zoomies"), "chase")
+
     def test_every_theme_and_state_has_all_directional_frames(self):
         for theme in dogi.COLOR_THEMES:
             theme_dir = ROOT / "assets" / "sprites" / theme.lower()

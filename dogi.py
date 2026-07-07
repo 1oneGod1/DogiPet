@@ -72,6 +72,7 @@ TICK_MS = 110
 WALK_SPEED = 3
 FETCH_SPEED = 7
 CHASE_SPEED = 9
+ZOOM_SPEED = 12
 CHASE_RANGE = 350
 TRANSPARENT = "#ff00fe"
 
@@ -707,6 +708,10 @@ FRAMES = {
     "think": [IDLE_1, IDLE_1],
     "jump":  [HAPPY_1, HAPPY_2],
     "dizzy": [IDLE_1, IDLE_2],
+    "curious": [IDLE_1, IDLE_2],
+    "tail_wag": [DIG_1, DIG_2],
+    "beg": [HAPPY_1, HAPPY_2],
+    "zoomies": [WALK_1, WALK_2],
 }
 
 # Raster sprites imported from the user-approved reference sheet.  FRAMES stays
@@ -740,10 +745,21 @@ SPRITE_FRAME_SEQUENCES = {
     "think": (0, 1, 2, 3, 2, 1),
 }
 SPRITE_FRAME_HOLD = {"think": 2}
+SPRITE_STATE_ASSET = {
+    "curious": "think",
+    "tail_wag": "dig",
+    "beg": "happy",
+    "zoomies": "chase",
+}
+
+
+def sprite_asset_state(state):
+    return SPRITE_STATE_ASSET.get(state, state)
 
 
 def sprite_frame_index(state, tick):
     """Return an animation frame with optional ping-pong and frame holding."""
+    state = sprite_asset_state(state)
     count = SPRITE_FRAME_COUNTS.get(state, 1)
     sequence = SPRITE_FRAME_SEQUENCES.get(state, tuple(range(count)))
     hold = SPRITE_FRAME_HOLD.get(state, 1)
@@ -752,6 +768,7 @@ def sprite_frame_index(state, tick):
 
 def sprite_is_mirrored(state, facing):
     """Mirror when requested facing differs from the source artwork."""
+    state = sprite_asset_state(state)
     native_left = state in SPRITE_NATIVE_LEFT
     return facing == (1 if native_left else -1)
 
@@ -960,6 +977,10 @@ class DogiPet:
                 "think": 999999,
                 "jump":  len(JUMP_ARC),
                 "dizzy": 44,
+                "curious": 36,
+                "tail_wag": 28,
+                "beg": 24,
+                "zoomies": 999999,
             }[state]
         self.state_timer = duration
         if state == "walk":
@@ -969,9 +990,18 @@ class DogiPet:
             )
             self.facing = 1 if self.target_x > self.x else -1
             self.motion_facing = self.facing
+        elif state == "zoomies":
+            margin = 40
+            self.target_x = (
+                self.app.screen_w - CANVAS_W - margin
+                if self.center_x() < self.app.screen_w // 2
+                else margin
+            )
+            self.facing = 1 if self.target_x > self.x else -1
+            self.motion_facing = self.facing
 
     def visual_facing(self):
-        if self.state in ("walk", "chase", "fetch"):
+        if self.state in ("walk", "chase", "fetch", "zoomies"):
             return self.motion_facing
         return self.facing
 
@@ -1031,10 +1061,11 @@ class DogiPet:
         return None
 
     def _sprite_image(self):
-        count = SPRITE_FRAME_COUNTS.get(self.state, 0)
+        asset_state = sprite_asset_state(self.state)
+        count = SPRITE_FRAME_COUNTS.get(asset_state, 0)
         if not count:
             return None
-        frame_index = sprite_frame_index(self.state, self.frame_i)
+        frame_index = sprite_frame_index(asset_state, self.frame_i)
         mirrored = sprite_is_mirrored(self.state, self.visual_facing())
         key = (self.theme, self.state, frame_index, mirrored)
         if key in self._sprite_cache:
@@ -1042,7 +1073,7 @@ class DogiPet:
         suffix = "_left" if mirrored else ""
         path = resource_path(
             "assets", "sprites", self.theme.lower(),
-            f"{self.state}_{frame_index}{suffix}.png",
+            f"{asset_state}_{frame_index}{suffix}.png",
         )
         try:
             image = tk.PhotoImage(file=str(path))
@@ -1111,7 +1142,10 @@ class DogiPet:
             self.set_state("idle")
 
         # mengetik -> Dogi ikut mengetik di laptop mininya
-        if typing and self.state in ("idle", "walk", "sleep", "dig"):
+        if typing and self.state in (
+            "idle", "walk", "sleep", "dig",
+            "curious", "tail_wag", "beg", "zoomies",
+        ):
             self.set_state("type")
         if self.state == "type" and not typing \
                 and now - self.app.last_key_time > 2.0:
@@ -1121,6 +1155,7 @@ class DogiPet:
         # memiliki urutan frame berbeda agar gerakannya terasa mengikuti roda.
         if scrolling and self.app.scroll_reaction_on and self.state in (
             "idle", "walk", "sleep", "dig", "type",
+            "curious", "tail_wag", "beg", "zoomies",
             "scroll_up", "scroll_down",
         ):
             scroll_state = "scroll_up" if scrolling > 0 else "scroll_down"
@@ -1169,6 +1204,15 @@ class DogiPet:
                 self.set_state("eat")
                 self.app.on_fed()
 
+        elif self.state == "zoomies":
+            self.facing = 1 if self.target_x > self.x else -1
+            if abs(self.target_x - self.x) > ZOOM_SPEED:
+                self.x += ZOOM_SPEED * self.facing
+            else:
+                self.x = self.target_x
+                self.show_msg("Wusss!", 2)
+                self.set_state("happy")
+
         elif self.state == "jump":
             i = len(JUMP_ARC) - self.state_timer
             i = max(0, min(len(JUMP_ARC) - 1, i))
@@ -1180,6 +1224,7 @@ class DogiPet:
         self.blink = (
             self.state in (
                 "idle", "dig", "type", "think",
+                "curious", "beg",
                 "scroll_up", "scroll_down", "meeting_watch",
             )
             and random.random() < 0.08
@@ -1200,12 +1245,15 @@ class DogiPet:
             elif self.state in (
                 "sleep", "happy", "dig", "type",
                 "scroll_up", "scroll_down", "meeting_alert", "meeting_watch",
-                "dizzy",
+                "dizzy", "curious", "tail_wag", "beg",
             ):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch"):
                 nxt = random.choices(
-                    ["idle", "walk", "sleep", "dig"],
+                    [
+                        "idle", "walk", "sleep", "dig", "curious",
+                        "tail_wag", "beg", "zoomies",
+                    ],
                     weights=self.app.state_weights(),
                 )[0]
                 self.set_state(nxt)
@@ -1328,6 +1376,20 @@ class DogiPet:
         menu.add_command(
             label="❤️  Elus", command=lambda: self.set_state("happy")
         )
+        behavior_menu = tk.Menu(menu, tearoff=0)
+        behavior_menu.add_command(
+            label="Zoomies", command=lambda: self.set_state("zoomies")
+        )
+        behavior_menu.add_command(
+            label="Penasaran", command=lambda: self.set_state("curious")
+        )
+        behavior_menu.add_command(
+            label="Goyang ekor", command=lambda: self.set_state("tail_wag")
+        )
+        behavior_menu.add_command(
+            label="Minta perhatian", command=lambda: self.set_state("beg")
+        )
+        menu.add_cascade(label="Tingkah Dogi", menu=behavior_menu)
         if not HAS_PYNPUT:
             menu.add_command(
                 label="(pip install pynput utk reaksi keyboard)",
@@ -2033,13 +2095,16 @@ class ControlCenter:
     def _draw_preview(self):
         self.preview.delete("all")
         pet = self.app.pets[0] if self.app.pets else None
-        state = pet.state if pet and pet.state in SPRITE_FRAME_COUNTS else "idle"
-        frame_index = sprite_frame_index(state, pet.frame_i) if pet else 0
-        mirrored = bool(pet and sprite_is_mirrored(state, pet.visual_facing()))
+        state = pet.state if pet else "idle"
+        asset_state = sprite_asset_state(state)
+        if asset_state not in SPRITE_FRAME_COUNTS:
+            asset_state = "idle"
+        frame_index = sprite_frame_index(asset_state, pet.frame_i) if pet else 0
+        mirrored = bool(pet and sprite_is_mirrored(asset_state, pet.visual_facing()))
         suffix = "_left" if mirrored else ""
         path = resource_path(
             "assets", "sprites", self.app.theme.lower(),
-            f"{state}_{frame_index}{suffix}.png",
+            f"{asset_state}_{frame_index}{suffix}.png",
         )
         try:
             self._preview_sprite_image = tk.PhotoImage(file=str(path))
@@ -2433,7 +2498,7 @@ class DogiApp:
         direction, triggered = self.cursor_swing.update(cursor_x, now)
         if direction:
             for pet in self.pets:
-                if pet.state in ("idle", "walk", "happy"):
+                if pet.state in ("idle", "walk", "happy", "curious", "beg"):
                     pet.facing = direction
         if not triggered:
             return False
@@ -2476,16 +2541,20 @@ class DogiApp:
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 10)
 
     def state_weights(self):
-        """Bobot pilihan state idle/walk/sleep/dig sesuai jam dan kondisi."""
+        """Bobot perilaku spontan sesuai jam, energi, dan suasana hati."""
         idle, walk, sleep, dig = 4, 4, 1, 1
+        curious, tail_wag, beg, zoomies = 2, 2, 1, 1
         if is_night(time.localtime().tm_hour):
             idle, walk, sleep, dig = 2, 1, 6, 0
+            curious, tail_wag, beg, zoomies = 1, 1, 0, 0
         if self.stats["energi"] < NEED_LOW:
             sleep += 4
             walk = max(1, walk - 2)
+            zoomies = 0
         if self.stats["senang"] < NEED_LOW:
             walk = max(1, walk - 1)  # lesu, malas jalan-jalan
-        return [idle, walk, sleep, dig]
+            beg += 3
+        return [idle, walk, sleep, dig, curious, tail_wag, beg, zoomies]
 
     def _update_stats(self, now):
         minutes = (now - self._last_stats_tick) / 60
@@ -2613,7 +2682,9 @@ class DogiApp:
                     bark(self.root, self.sound_style)
         elif now >= self._meeting_watch_at:
             self._meeting_watch_at = now + MEETING_WATCH_EVERY_SECONDS
-            if primary.state in ("idle", "walk", "dig"):
+            if primary.state in (
+                "idle", "walk", "dig", "curious", "tail_wag", "beg",
+            ):
                 primary.set_state("meeting_watch")
                 primary.show_msg(
                     random.choice(("Aku masih ngawasin.", "Meetingnya aman!")),
@@ -2807,8 +2878,9 @@ class DogiApp:
             return
         x = random.randint(40, max(41, self.screen_w - BONE_W - 40))
         # pilih Dogi terdekat yang sedang senggang
-        free = [p for p in self.pets
-                if p.state in ("idle", "walk", "sleep", "dig")]
+        free = [p for p in self.pets if p.state in (
+            "idle", "walk", "sleep", "dig", "curious", "tail_wag", "beg",
+        )]
         pet = min(
             free or self.pets, key=lambda p: abs(p.center_x() - x)
         )
@@ -2830,8 +2902,8 @@ class DogiApp:
         for i in range(len(self.pets)):
             for j in range(i + 1, len(self.pets)):
                 a, b = self.pets[i], self.pets[j]
-                if a.state in ("idle", "walk", "dig") \
-                        and b.state in ("idle", "walk", "dig") \
+                if a.state in ("idle", "walk", "dig", "curious", "tail_wag", "beg") \
+                        and b.state in ("idle", "walk", "dig", "curious", "tail_wag", "beg") \
                         and abs(a.center_x() - b.center_x()) < FRIEND_DIST \
                         and abs(a.y - b.y) < 80:
                     a.facing = 1 if b.x > a.x else -1
@@ -2917,7 +2989,7 @@ if __name__ == "__main__":
         (arg.split("=", 1)[1].lower() for arg in sys.argv if arg.startswith("--state=")),
         None,
     )
-    if state_argument in SPRITE_FRAME_COUNTS and application.pets:
+    if state_argument in FRAMES and application.pets:
         application.pets[0].set_state(state_argument, 999999)
     page_argument = next(
         (arg.split("=", 1)[1].upper() for arg in sys.argv if arg.startswith("--page=")),

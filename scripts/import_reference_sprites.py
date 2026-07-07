@@ -11,7 +11,7 @@ import argparse
 import colorsys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +177,16 @@ def normalize_frame(content: Image.Image, state: str) -> Image.Image:
         # enlarged in hard 5×5 blocks. This prevents "fine" pixel art from
         # sneaking back in through generated source assets.
     frame = frame.resize(LOGICAL_FRAME_SIZE, Image.Resampling.NEAREST)
+    if state == "type":
+        # Rebuild the laptop on the logical grid so it always has a complete
+        # screen and keyboard base, independent of generated-sheet cropping.
+        draw = ImageDraw.Draw(frame)
+        draw.rectangle((25, 18, 28, 25), fill=(25, 29, 32, 255))
+        draw.rectangle((26, 19, 27, 24), fill=(91, 99, 108, 255))
+        draw.rectangle((26, 21, 27, 22), fill=(91, 224, 255, 255))
+        draw.rectangle((21, 25, 29, 27), fill=(25, 29, 32, 255))
+        draw.rectangle((22, 25, 28, 26), fill=(173, 184, 192, 255))
+        draw.rectangle((23, 25, 24, 25), fill=(91, 224, 255, 255))
     return frame.resize(FRAME_SIZE, Image.Resampling.NEAREST)
 
 
@@ -197,10 +207,12 @@ def extract_frames(sheet: Image.Image, state: str) -> list[Image.Image]:
 def extract_typing_frames(sheet: Image.Image) -> list[Image.Image]:
     """Import seven transitions plus frame zero as a seamless loop close."""
     cleaned = clean_chroma_residue(sheet.convert("RGBA"))
+    # The generated subjects are wider than an even 1/8 grid. Boundaries are
+    # placed in the actual empty gaps so the laptop is never sliced off.
+    bounds = (0, 290, 562, 833, 1102, 1374, 1643, 1911, cleaned.width)
     frames = []
     for source_index in (0, 1, 2, 3, 4, 5, 6, 0):
-        left = round(source_index * cleaned.width / 8)
-        right = round((source_index + 1) * cleaned.width / 8)
+        left, right = bounds[source_index:source_index + 2]
         cell = cleaned.crop((left, 0, right, cleaned.height))
         bbox = cell.getbbox()
         if not bbox:

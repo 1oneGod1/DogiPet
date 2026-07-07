@@ -61,6 +61,15 @@ class DragStateTests(unittest.TestCase):
         self.assertEqual(pet.state, "type")
         self.assertEqual(pet.state_timer, 20)
 
+    def test_zoomies_targets_opposite_side_and_uses_motion_facing(self):
+        pet = self.make_pet()
+        pet.facing = 1
+        pet.motion_facing = 1
+        pet.set_state("zoomies")
+        self.assertEqual(pet.state, "zoomies")
+        self.assertGreater(pet.target_x, pet.x)
+        self.assertEqual(pet.visual_facing(), 1)
+
     def test_drag_enters_hold_and_drop_exits_it(self):
         pet = self.make_pet()
         pet._on_press(SimpleNamespace(x_root=200, y_root=300))
