@@ -2290,7 +2290,7 @@ class DogiApp:
         self._load_config()
         ensure_bark_wav(self.sound_style)
 
-        if HAS_PYNPUT:
+        if HAS_PYNPUT and not self.smoke_test:
             listener = _pynput_keyboard.Listener(on_press=self._on_key)
             listener.daemon = True
             listener.start()

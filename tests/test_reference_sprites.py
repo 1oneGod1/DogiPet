@@ -32,6 +32,19 @@ class ReferenceSpriteTests(unittest.TestCase):
                     self.assertEqual(image.getchannel("A").getextrema()[0], 0)
                     self.assertIsNotNone(image.getbbox())
 
+    def test_every_sprite_uses_original_five_pixel_blocks(self):
+        sample_dir = ROOT / "assets" / "sprites" / "coklat"
+        for path in sample_dir.glob("*.png"):
+            image = Image.open(path).convert("RGBA")
+            for y in range(0, image.height, dogi.SCALE):
+                for x in range(0, image.width, dogi.SCALE):
+                    block = image.crop(
+                        (x, y, x + dogi.SCALE, y + dogi.SCALE)
+                    )
+                    colors = set(block.get_flattened_data())
+                    with self.subTest(sprite=path.name, x=x, y=y):
+                        self.assertEqual(len(colors), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,27 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "assets" / "sprites"
 FRAME_SIZE = (160, 140)
+LOGICAL_FRAME_SIZE = (32, 28)
+
+STATE_MAX_CONTENT = {
+    "idle": (80, 60),
+    "walk": (85, 60),
+    "chase": (95, 55),
+    "fetch": (95, 55),
+    "sleep": (85, 50),
+    "happy": (70, 70),
+    "dig": (80, 65),
+    "eat": (100, 65),
+    "hold": (55, 120),
+    "type": (120, 72),
+    "scroll_up": (120, 80),
+    "scroll_down": (120, 80),
+    "meeting_alert": (120, 80),
+    "meeting_watch": (120, 70),
+    "think": (75, 85),
+    "jump": (95, 65),
+    "dizzy": (80, 90),
+}
 
 THEMES = {
     "Shiba": {"body": "#e8a44c", "cream": "#f6ddb0", "outline": "#5a3a21"},
@@ -49,23 +70,25 @@ ROWS = {
 }
 GRID_COLUMNS = 4
 ROW_RANGES = {
-    "idle": (24, 114),
-    "walk": (147, 237),
-    "chase": (264, 353),
-    "happy": (366, 463),
-    "sleep": (482, 582),
-    "eat": (607, 699),
-    "dig": (723, 815),
-    "hold": (829, 974),
-    "type": (981, 1071),
-    "scroll_up": (1090, 1172),
-    "scroll_down": (1194, 1280),
-    "meeting_alert": (1293, 1396),
-    "meeting_watch": (1407, 1501),
-    "think": (1502, 1597),
-    "jump": (1605, 1715),
-    "dizzy": (1717, 1817),
-    "fetch": (1824, 1914),
+    "idle": (25, 122),
+    "walk": (145, 245),
+    "chase": (270, 365),
+    "happy": (382, 483),
+    "sleep": (493, 602),
+    "eat": (623, 727),
+    "dig": (748, 846),
+    "hold": (846, 1000),
+    "type": (1013, 1107),
+    "scroll_up": (1121, 1221),
+    "scroll_down": (1238, 1331),
+    "meeting_alert": (1345, 1456),
+    "meeting_watch": (1467, 1554),
+    "think": (1559, 1674),
+    "jump": (1683, 1790),
+    "dizzy": (1800, 1924),
+    # Sheet v0.5.1 dedicates its final row to dizzy; fetch reuses the clean
+    # sprint cycle, which is the same motion used while chasing a bone.
+    "fetch": (270, 365),
 }
 
 
@@ -89,6 +112,20 @@ def remove_checkerboard(image: Image.Image) -> Image.Image:
         # The sheet background is neutral and brighter than every useful prop.
         alpha = 0 if min(red, green, blue) > 230 and spread < 14 else 255
         pixels.append((red, green, blue, alpha))
+    out.putdata(pixels)
+    return out
+
+
+def clean_chroma_residue(image: Image.Image) -> Image.Image:
+    """Harden alpha and discard any green-key fringe left by generation."""
+    out = Image.new("RGBA", image.size)
+    pixels = []
+    for red, green, blue, alpha in _pixels(image.convert("RGBA")):
+        green_key = green > 120 and green > red * 1.35 and green > blue * 1.35
+        if alpha < 128 or green_key:
+            pixels.append((0, 0, 0, 0))
+        else:
+            pixels.append((red, green, blue, 255))
     out.putdata(pixels)
     return out
 
@@ -136,19 +173,21 @@ def extract_frames(sheet: Image.Image, state: str) -> list[Image.Image]:
         if not bbox:
             raise RuntimeError(f"No visible pixels for {state} frame {index}")
         content = cell.crop(bbox)
-        if content.width > FRAME_SIZE[0] - 8 or content.height > FRAME_SIZE[1] - 6:
-            ratio = min(
-                (FRAME_SIZE[0] - 8) / content.width,
-                (FRAME_SIZE[1] - 6) / content.height,
-            )
-            content = content.resize(
-                (round(content.width * ratio), round(content.height * ratio)),
-                Image.Resampling.NEAREST,
-            )
+        max_width, max_height = STATE_MAX_CONTENT[state]
+        ratio = min(max_width / content.width, max_height / content.height)
+        content = content.resize(
+            (max(1, round(content.width * ratio)), max(1, round(content.height * ratio))),
+            Image.Resampling.NEAREST,
+        )
         frame = Image.new("RGBA", FRAME_SIZE)
         x = (FRAME_SIZE[0] - content.width) // 2
         y = FRAME_SIZE[1] - content.height - 3
         frame.alpha_composite(content, (x, y))
+        # Match the original Dogi renderer exactly: a 32×28 logical canvas,
+        # enlarged in hard 5×5 blocks. This prevents "fine" pixel art from
+        # sneaking back in through generated source assets.
+        frame = frame.resize(LOGICAL_FRAME_SIZE, Image.Resampling.NEAREST)
+        frame = frame.resize(FRAME_SIZE, Image.Resampling.NEAREST)
         frames.append(frame)
     return frames
 
@@ -176,6 +215,7 @@ def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     source = Image.open(args.source)
     cleaned = source.convert("RGBA") if "A" in source.getbands() else remove_checkerboard(source)
+    cleaned = clean_chroma_residue(cleaned)
     for old_sprite in OUTPUT.rglob("*.png"):
         old_sprite.unlink()
     base_frames = {

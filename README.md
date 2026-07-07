@@ -5,10 +5,10 @@ tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
 istirahat, dan merayakan saat AI agent selesai bekerja.
 
 Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
-kode, suara, dan identitas Dogi sendiri. Mulai v0.5.0, semua gerakan memakai
+kode, suara, dan identitas Dogi sendiri. Mulai v0.5.1, semua gerakan memakai
 sprite PNG pixel-art transparan dari lembar karakter referensi yang disetujui.
 
-![Sprite Dogi v0.5.0](qa/reference-sprites-v050-top.png)
+![Sprite Dogi v0.5.1](qa/reference-sprites-v051-top.png)
 
 ## Aplikasi dan Control Center
 
@@ -147,10 +147,10 @@ Repository: <https://github.com/1oneGod1/DogiPet>
 
 ### Mengimpor ulang lembar sprite
 
-Lembar sprite bersih disimpan di
-`assets/reference/dogi-clean-sprite-sheet-v050.png`. Untuk mengekstrak ulang
+Lembar sprite chunky disimpan di
+`assets/reference/dogi-chunky-sprite-sheet-v051.png`. Untuk mengekstrak ulang
 seluruh animasi transparan dan enam variasi tema:
 
 ```powershell
-python scripts/import_reference_sprites.py assets/reference/dogi-clean-sprite-sheet-v050.png
+python scripts/import_reference_sprites.py assets/reference/dogi-chunky-sprite-sheet-v051.png
 ```
