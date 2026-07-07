@@ -10,6 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReferenceSpriteTests(unittest.TestCase):
+    def test_left_native_running_art_is_mirrored_toward_motion(self):
+        for state in ("walk", "chase", "fetch"):
+            with self.subTest(state=state):
+                self.assertTrue(dogi.sprite_is_mirrored(state, 1))
+                self.assertFalse(dogi.sprite_is_mirrored(state, -1))
+        self.assertFalse(dogi.sprite_is_mirrored("idle", 1))
+        self.assertTrue(dogi.sprite_is_mirrored("idle", -1))
+
+    def test_confused_animation_uses_slow_ping_pong_sequence(self):
+        frames = [dogi.sprite_frame_index("think", tick) for tick in range(12)]
+        self.assertEqual(frames, [0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 1, 1])
+
     def test_every_theme_and_state_has_all_directional_frames(self):
         for theme in dogi.COLOR_THEMES:
             theme_dir = ROOT / "assets" / "sprites" / theme.lower()

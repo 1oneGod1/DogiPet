@@ -1,4 +1,4 @@
-# Design QA — DogiPet 0.5.1
+# Design QA — DogiPet 0.5.2
 
 **Source visual truth**
 
@@ -16,6 +16,9 @@
   baru dalam satu comparison input.
 - `qa/pixel-density-implementation-v051.png` — render Tk dari state `idle`
   melalui opsi QA `--opaque-preview --state=idle`.
+- `qa/think-animation-v052.png` — urutan ping-pong bingung yang dipakai app.
+- `qa/walk-right-v052.png` dan `qa/run-right-v052.png` — frame sumber-kiri
+  setelah dicerminkan untuk gerakan ke kanan.
 
 **Viewport and state**
 
@@ -60,6 +63,10 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 ## Interactions verified
 
 - Dogi menoleh sesuai arah gerak horizontal kursor saat idle/walk/happy.
+- Walk, chase, dan fetch memakai metadata arah sumber-kiri; sprite dicerminkan
+  ketika koordinat bergerak ke kanan sehingga kepala selalu menuju target.
+- Animasi bingung memakai urutan `0,1,2,3,2,1`, tiap frame ditahan dua tick;
+  transisi siklus tidak lagi melompat dari frame terakhir ke pertama.
 - Empat pembalikan dengan lintasan minimal 55 px dalam 2,6 detik memicu state
   `dizzy` selama sekitar 4,8 detik.
 - Gerakan kecil/jitter tidak memicu pusing dan cooldown delapan detik mencegah
@@ -71,11 +78,11 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 42 unit test lulus, termasuk detektor gesture, false-positive jitter,
+- 44 unit test lulus, termasuk detektor gesture, false-positive jitter,
   integrasi state pusing, kelengkapan 816 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan
   uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.1`.
+- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.2`.
 
 final result: passed

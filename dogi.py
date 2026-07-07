@@ -731,7 +731,29 @@ SPRITE_FRAME_COUNTS = {
     "jump": 4,
     "dizzy": 4,
 }
-SPRITE_NATIVE_LEFT = {"sleep", "meeting_alert", "meeting_watch"}
+SPRITE_NATIVE_LEFT = {
+    "walk", "chase", "fetch", "sleep", "meeting_alert", "meeting_watch",
+}
+SPRITE_FRAME_SEQUENCES = {
+    # Kembali melewati frame tengah agar kepala tidak melompat dari kanan
+    # langsung ke kiri saat siklus animasi bingung dimulai ulang.
+    "think": (0, 1, 2, 3, 2, 1),
+}
+SPRITE_FRAME_HOLD = {"think": 2}
+
+
+def sprite_frame_index(state, tick):
+    """Return an animation frame with optional ping-pong and frame holding."""
+    count = SPRITE_FRAME_COUNTS.get(state, 1)
+    sequence = SPRITE_FRAME_SEQUENCES.get(state, tuple(range(count)))
+    hold = SPRITE_FRAME_HOLD.get(state, 1)
+    return sequence[(tick // hold) % len(sequence)]
+
+
+def sprite_is_mirrored(state, facing):
+    """Mirror when requested facing differs from the source artwork."""
+    native_left = state in SPRITE_NATIVE_LEFT
+    return facing == (1 if native_left else -1)
 
 JUMP_ARC = [6, 14, 22, 26, 26, 22, 14, 6, 0]
 
@@ -999,9 +1021,8 @@ class DogiPet:
         count = SPRITE_FRAME_COUNTS.get(self.state, 0)
         if not count:
             return None
-        frame_index = self.frame_i % count
-        native_left = self.state in SPRITE_NATIVE_LEFT
-        mirrored = self.facing == (1 if native_left else -1)
+        frame_index = sprite_frame_index(self.state, self.frame_i)
+        mirrored = sprite_is_mirrored(self.state, self.facing)
         key = (self.theme, self.state, frame_index, mirrored)
         if key in self._sprite_cache:
             return self._sprite_cache[key]
@@ -1994,9 +2015,8 @@ class ControlCenter:
         self.preview.delete("all")
         pet = self.app.pets[0] if self.app.pets else None
         state = pet.state if pet and pet.state in SPRITE_FRAME_COUNTS else "idle"
-        frame_index = pet.frame_i % SPRITE_FRAME_COUNTS[state] if pet else 0
-        native_left = state in SPRITE_NATIVE_LEFT
-        mirrored = bool(pet and pet.facing == (1 if native_left else -1))
+        frame_index = sprite_frame_index(state, pet.frame_i) if pet else 0
+        mirrored = bool(pet and sprite_is_mirrored(state, pet.facing))
         suffix = "_left" if mirrored else ""
         path = resource_path(
             "assets", "sprites", self.app.theme.lower(),
