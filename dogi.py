@@ -722,7 +722,7 @@ SPRITE_FRAME_COUNTS = {
     "dig": 4,
     "eat": 4,
     "hold": 4,
-    "type": 4,
+    "type": 8,
     "scroll_up": 4,
     "scroll_down": 4,
     "meeting_alert": 4,
@@ -906,6 +906,7 @@ class DogiPet:
         self.state_timer = random.randint(20, 50)
         self.frame_i = random.randint(0, 1)
         self.facing = random.choice([1, -1])
+        self.motion_facing = self.facing
         self.target_x = x
         self.blink = False
         self.temp_msg = None
@@ -967,6 +968,18 @@ class DogiPet:
                 margin, self.app.screen_w - CANVAS_W - margin
             )
             self.facing = 1 if self.target_x > self.x else -1
+            self.motion_facing = self.facing
+
+    def visual_facing(self):
+        if self.state in ("walk", "chase", "fetch"):
+            return self.motion_facing
+        return self.facing
+
+    def _record_motion_facing(self, previous_x):
+        if self.x > previous_x:
+            self.motion_facing = 1
+        elif self.x < previous_x:
+            self.motion_facing = -1
 
     def show_msg(self, text, seconds=5):
         self.temp_msg = (text, time.time() + seconds)
@@ -1022,7 +1035,7 @@ class DogiPet:
         if not count:
             return None
         frame_index = sprite_frame_index(self.state, self.frame_i)
-        mirrored = sprite_is_mirrored(self.state, self.facing)
+        mirrored = sprite_is_mirrored(self.state, self.visual_facing())
         key = (self.theme, self.state, frame_index, mirrored)
         if key in self._sprite_cache:
             return self._sprite_cache[key]
@@ -1081,6 +1094,7 @@ class DogiPet:
 
     # ---------------------------------------------------------------- logika
     def tick(self, now, cx, cy, typing, thinking, scrolling=0):
+        previous_x = self.x
         # Drag punya prioritas tertinggi: jangan biarkan status agent, typing,
         # atau pergerakan otomatis menimpa pose Dogi yang sedang digendong.
         if self._drag_start and self._moved:
@@ -1162,6 +1176,7 @@ class DogiPet:
 
         # batas layar & kedipan
         self.x = max(0, min(self.app.screen_w - CANVAS_W, self.x))
+        self._record_motion_facing(previous_x)
         self.blink = (
             self.state in (
                 "idle", "dig", "type", "think",
@@ -1173,7 +1188,11 @@ class DogiPet:
         # transisi state
         self.state_timer -= 1
         if self.state_timer <= 0:
-            if self.state == "jump":
+            if self.state == "type" and typing:
+                # Jangan selipkan satu frame idle setiap timer type habis saat
+                # pengguna masih aktif mengetik.
+                self.state_timer = 20
+            elif self.state == "jump":
                 self.y = self.ground_y
                 self.set_state("happy", 8)
             elif self.state == "eat":
@@ -2016,7 +2035,7 @@ class ControlCenter:
         pet = self.app.pets[0] if self.app.pets else None
         state = pet.state if pet and pet.state in SPRITE_FRAME_COUNTS else "idle"
         frame_index = sprite_frame_index(state, pet.frame_i) if pet else 0
-        mirrored = bool(pet and sprite_is_mirrored(state, pet.facing))
+        mirrored = bool(pet and sprite_is_mirrored(state, pet.visual_facing()))
         suffix = "_left" if mirrored else ""
         path = resource_path(
             "assets", "sprites", self.app.theme.lower(),

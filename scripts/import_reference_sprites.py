@@ -162,6 +162,24 @@ def recolor_dog(image: Image.Image, palette: dict[str, str]) -> Image.Image:
     return out
 
 
+def normalize_frame(content: Image.Image, state: str) -> Image.Image:
+    max_width, max_height = STATE_MAX_CONTENT[state]
+    ratio = min(max_width / content.width, max_height / content.height)
+    content = content.resize(
+        (max(1, round(content.width * ratio)), max(1, round(content.height * ratio))),
+        Image.Resampling.NEAREST,
+    )
+    frame = Image.new("RGBA", FRAME_SIZE)
+    x = (FRAME_SIZE[0] - content.width) // 2
+    y = FRAME_SIZE[1] - content.height - 3
+    frame.alpha_composite(content, (x, y))
+        # Match the original Dogi renderer exactly: a 32×28 logical canvas,
+        # enlarged in hard 5×5 blocks. This prevents "fine" pixel art from
+        # sneaking back in through generated source assets.
+    frame = frame.resize(LOGICAL_FRAME_SIZE, Image.Resampling.NEAREST)
+    return frame.resize(FRAME_SIZE, Image.Resampling.NEAREST)
+
+
 def extract_frames(sheet: Image.Image, state: str) -> list[Image.Image]:
     top, bottom = ROW_RANGES[state]
     frames = []
@@ -172,23 +190,22 @@ def extract_frames(sheet: Image.Image, state: str) -> list[Image.Image]:
         bbox = cell.getbbox()
         if not bbox:
             raise RuntimeError(f"No visible pixels for {state} frame {index}")
-        content = cell.crop(bbox)
-        max_width, max_height = STATE_MAX_CONTENT[state]
-        ratio = min(max_width / content.width, max_height / content.height)
-        content = content.resize(
-            (max(1, round(content.width * ratio)), max(1, round(content.height * ratio))),
-            Image.Resampling.NEAREST,
-        )
-        frame = Image.new("RGBA", FRAME_SIZE)
-        x = (FRAME_SIZE[0] - content.width) // 2
-        y = FRAME_SIZE[1] - content.height - 3
-        frame.alpha_composite(content, (x, y))
-        # Match the original Dogi renderer exactly: a 32×28 logical canvas,
-        # enlarged in hard 5×5 blocks. This prevents "fine" pixel art from
-        # sneaking back in through generated source assets.
-        frame = frame.resize(LOGICAL_FRAME_SIZE, Image.Resampling.NEAREST)
-        frame = frame.resize(FRAME_SIZE, Image.Resampling.NEAREST)
-        frames.append(frame)
+        frames.append(normalize_frame(cell.crop(bbox), state))
+    return frames
+
+
+def extract_typing_frames(sheet: Image.Image) -> list[Image.Image]:
+    """Import seven transitions plus frame zero as a seamless loop close."""
+    cleaned = clean_chroma_residue(sheet.convert("RGBA"))
+    frames = []
+    for source_index in (0, 1, 2, 3, 4, 5, 6, 0):
+        left = round(source_index * cleaned.width / 8)
+        right = round((source_index + 1) * cleaned.width / 8)
+        cell = cleaned.crop((left, 0, right, cleaned.height))
+        bbox = cell.getbbox()
+        if not bbox:
+            raise RuntimeError(f"No visible pixels for typing frame {source_index}")
+        frames.append(normalize_frame(cell.crop(bbox), "type"))
     return frames
 
 
@@ -208,6 +225,11 @@ def build_preview(frames: dict[str, list[Image.Image]], target: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
+    parser.add_argument(
+        "--typing-strip",
+        type=Path,
+        default=ROOT / "assets" / "reference" / "dogi-typing-strip-v053.png",
+    )
     args = parser.parse_args()
     if not args.source.exists():
         raise SystemExit(f"Reference sheet not found: {args.source}")
@@ -222,6 +244,8 @@ def main() -> None:
         state: extract_frames(cleaned, state)
         for state in ROWS
     }
+    if args.typing_strip.exists():
+        base_frames["type"] = extract_typing_frames(Image.open(args.typing_strip))
 
     for theme, palette in THEMES.items():
         theme_dir = OUTPUT / theme.lower()

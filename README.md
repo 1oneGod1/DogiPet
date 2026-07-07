@@ -5,7 +5,7 @@ tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
 istirahat, dan merayakan saat AI agent selesai bekerja.
 
 Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
-kode, suara, dan identitas Dogi sendiri. Mulai v0.5.2, semua gerakan memakai
+kode, suara, dan identitas Dogi sendiri. Mulai v0.5.3, semua gerakan memakai
 sprite PNG pixel-art transparan dari lembar karakter referensi yang disetujui.
 
 ![Sprite Dogi v0.5.1](qa/reference-sprites-v051-top.png)
@@ -28,6 +28,8 @@ sementara desktop pet tetap aktif.
 - Menoleh mengikuti kursor; bila kursor digerakkan kanan-kiri berulang dengan
   cepat, Dogi menjadi pusing lengkap dengan animasi spiral.
 - Animasi bingung memakai transisi ping-pong yang lebih halus dan lambat.
+- Arah sprite lari mengikuti perubahan posisi aktual, bukan sekadar target;
+  animasi mengetik juga memakai ping-pong tanpa kedipan idle saat timer habis.
 - Ikut mengetik di laptop mini saat kamu mengetik.
 - Ikut menggerakkan indikator laptop saat kamu scroll ke atas atau bawah.
 - Mengenali jendela Zoom, Teams, Google Meet, Webex, dan call lain; Dogi

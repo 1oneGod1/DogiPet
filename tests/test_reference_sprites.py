@@ -22,6 +22,17 @@ class ReferenceSpriteTests(unittest.TestCase):
         frames = [dogi.sprite_frame_index("think", tick) for tick in range(12)]
         self.assertEqual(frames, [0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 1, 1])
 
+    def test_typing_animation_uses_eight_frame_strip(self):
+        frames = [dogi.sprite_frame_index("type", tick) for tick in range(8)]
+        self.assertEqual(frames, list(range(8)))
+
+    def test_typing_loop_closes_on_the_same_pose(self):
+        root = ROOT / "assets" / "sprites" / "coklat"
+        self.assertEqual(
+            Image.open(root / "type_0.png").tobytes(),
+            Image.open(root / "type_7.png").tobytes(),
+        )
+
     def test_every_theme_and_state_has_all_directional_frames(self):
         for theme in dogi.COLOR_THEMES:
             theme_dir = ROOT / "assets" / "sprites" / theme.lower()
