@@ -1,3 +1,3 @@
 """Versi aplikasi yang dipakai UI, installer, dan pemeriksa pembaruan."""
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"

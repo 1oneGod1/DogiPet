@@ -39,6 +39,8 @@ import threading
 import pathlib
 import webbrowser
 
+import agent_hooks
+import dogi_hook
 from build_info import BUILD_ID
 from updater import RELEASE_PAGE, UpdateInfo, UpdateManager, launch_installer
 from version import VERSION
@@ -90,7 +92,15 @@ FRIEND_COOLDOWN = 25       # detik jeda antar sapaan
 CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
-BARK_FILE = CONF_DIR / "bark.wav"
+
+# gaya gonggongan: deretan (frek awal, frek akhir, durasi, volume)
+BARK_STYLES = {
+    "klasik": ((650, 280, 0.10, 0.90), (560, 240, 0.13, 0.90)),
+    "kecil":  ((950, 520, 0.07, 0.75), (1050, 560, 0.06, 0.75)),
+    "besar":  ((360, 150, 0.18, 1.00), (320, 140, 0.20, 1.00)),
+}
+SOUND_CHOICES = ("klasik", "kecil", "besar", "senyap")
+DEFAULT_SOUND = "klasik"
 
 COLOR_THEMES = {
     "Shiba":  {"o": "#e8a44c", "c": "#f6ddb0", "k": "#5a3a21"},
@@ -111,6 +121,97 @@ FIXED_COLORS = {
     "d": "#a8865c",  # tanah/debu galian
     ".": None,
 }
+
+# ------------------------------------------------ kebutuhan & jam biologis
+STAT_MAX = 100.0
+DEFAULT_STATS = {"kenyang": 80.0, "energi": 80.0, "senang": 80.0}
+KENYANG_TURUN_PER_MENIT = 100 / 240   # kenyang habis dalam ~4 jam
+ENERGI_TURUN_PER_MENIT = 100 / 360    # energi habis ~6 jam terjaga
+ENERGI_PULIH_PER_MENIT = 100 / 60     # tidur 1 jam memulihkan penuh
+SENANG_TURUN_PER_MENIT = 100 / 480    # kangen dielus setelah ~8 jam
+OFFLINE_DECAY_FACTOR = 0.25           # waktu offline dihitung lebih ringan
+OFFLINE_FLOOR = 25.0                  # decay offline tidak menghukum terlalu dalam
+NEED_LOW = 30                         # di bawah ini Dogi mulai minta perhatian
+NAG_COOLDOWN = 120                    # detik jeda antar rengekan
+NIGHT_START_HOUR = 22
+NIGHT_END_HOUR = 6
+MORNING_START_HOUR = 6
+MORNING_END_HOUR = 11
+LUNCH_HOUR = 12
+
+
+def clamp_stat(value):
+    return max(0.0, min(STAT_MAX, float(value)))
+
+
+def decay_stats(stats, minutes, sleeping=False):
+    """Hitung stat baru setelah `minutes` menit; tidur memulihkan energi."""
+    if minutes <= 0:
+        return dict(stats)
+    kenyang_rate = KENYANG_TURUN_PER_MENIT * (0.5 if sleeping else 1.0)
+    energi_delta = (
+        ENERGI_PULIH_PER_MENIT if sleeping else -ENERGI_TURUN_PER_MENIT
+    ) * minutes
+    return {
+        "kenyang": clamp_stat(stats["kenyang"] - kenyang_rate * minutes),
+        "energi": clamp_stat(stats["energi"] + energi_delta),
+        "senang": clamp_stat(stats["senang"] - SENANG_TURUN_PER_MENIT * minutes),
+    }
+
+
+def offline_decay(stats, minutes):
+    """Decay ringan selama aplikasi tertutup, dengan batas bawah yang ramah."""
+    decayed = decay_stats(stats, minutes * OFFLINE_DECAY_FACTOR)
+    return {
+        key: max(decayed[key], min(clamp_stat(stats[key]), OFFLINE_FLOOR))
+        for key in decayed
+    }
+
+
+def is_night(hour):
+    return hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+
+
+def is_morning(hour):
+    return MORNING_START_HOUR <= hour < MORNING_END_HOUR
+
+
+# --------------------------------------------------- deteksi kerja nonstop
+REST_IDLE_RESET_S = 5 * 60    # jeda input selama ini dihitung sudah istirahat
+REST_NAG_EVERY_S = 10 * 60    # ulangi ajakan tiap 10 menit bila masih lanjut
+REST_CHOICES = (45, 60, 90)   # pilihan ambang menit nonstop
+
+
+class ActivityMonitor:
+    """Melacak berapa menit pengguna aktif beruntun di komputer.
+
+    Aktif = ada input keyboard/mouse. Jeda input sepanjang `idle_reset_s`
+    dianggap istirahat dan memulai sesi baru.
+    """
+
+    def __init__(self, idle_reset_s=REST_IDLE_RESET_S):
+        self.idle_reset_s = idle_reset_s
+        self.session_start = None
+        self.last_activity = None
+
+    def update(self, now, active):
+        """Catat kondisi saat ini; kembalikan menit aktif beruntun."""
+        if active:
+            if (
+                self.last_activity is None
+                or now - self.last_activity >= self.idle_reset_s
+            ):
+                self.session_start = now
+            self.last_activity = now
+        elif (
+            self.last_activity is not None
+            and now - self.last_activity >= self.idle_reset_s
+        ):
+            self.session_start = None
+        if self.session_start is None:
+            return 0.0
+        return (now - self.session_start) / 60
+
 
 # ------------------------------------------------------------------ sprite art
 # Grid 16x12, menghadap KANAN. 'n' mata (bergerak), 'N' hidung.
@@ -297,6 +398,69 @@ EAT_2 = [
     "................",
 ]
 
+# Diangkat: Dogi menggantung kaget saat diseret, kaki berayun-ayun.
+HOLD_1 = [
+    "..........kk.kk.",
+    "..........kokkok",
+    "..........koooo.",
+    ".......kooooooo.",
+    ".......koonoono.",
+    ".......kooccccN.",
+    ".......kooocccp.",
+    ".......koooook..",
+    ".......kooook...",
+    ".......kok.kok..",
+    ".......kk...kk..",
+    "................",
+]
+
+HOLD_2 = [
+    "..........kk.kk.",
+    "..........kokkok",
+    "..........koooo.",
+    ".......kooooooo.",
+    ".......koonoono.",
+    ".......kooccccN.",
+    ".......kooocccp.",
+    ".......koooook..",
+    ".......kooook...",
+    ".......kok..kok.",
+    ".......kk....kk.",
+    "................",
+]
+
+# Ikut mengetik: laptop mini di depan Dogi, kaki depan bergantian menekan
+# tombol. Layar memakai warna 'z' agar tampak menyala.
+TYPE_1 = [
+    "..........kk.kk.",
+    ".k........kokkok",
+    ".kk.......koooo.",
+    "..kk...kooooooo.",
+    "...koooooonoono.",
+    "....koooooccccN.",
+    "....koooooocccp.",
+    "....kooooooookzw",
+    "....kockoo.ko.zw",
+    "....kok.....kozw",
+    "....kk...wwwwwww",
+    "................",
+]
+
+TYPE_2 = [
+    "..........kk.kk.",
+    ".k........kokkok",
+    ".kk.......koooo.",
+    "..kk...kooooooo.",
+    "...koooooonoono.",
+    "....koooooccccN.",
+    "....koooooocccp.",
+    "....kooooooookzw",
+    "....kockoo..kozw",
+    "....kok....ko.zw",
+    "....kk...wwwwwww",
+    "................",
+]
+
 FRAMES = {
     "idle":  [IDLE_1, IDLE_2],
     "walk":  [WALK_1, WALK_2],
@@ -306,6 +470,8 @@ FRAMES = {
     "happy": [HAPPY_1, HAPPY_2],
     "dig":   [DIG_1, DIG_2],
     "eat":   [EAT_1, EAT_2],
+    "hold":  [HOLD_1, HOLD_2],
+    "type":  [TYPE_1, TYPE_2],
     "think": [IDLE_1, IDLE_1],
     "jump":  [HAPPY_1, HAPPY_2],
 }
@@ -328,9 +494,14 @@ def mirror(frame):
 
 
 # ---------------------------------------------------------------- suara
-def ensure_bark_wav():
-    """Sintesis file WAV gonggongan 'guk-guk' saat pertama dijalankan."""
-    if BARK_FILE.exists():
+def bark_file(style):
+    return CONF_DIR / f"bark-{style}.wav"
+
+
+def ensure_bark_wav(style=DEFAULT_SOUND):
+    """Sintesis file WAV gonggongan untuk gaya tertentu bila belum ada."""
+    bursts = BARK_STYLES.get(style)
+    if not bursts or bark_file(style).exists():
         return
     try:
         CONF_DIR.mkdir(exist_ok=True)
@@ -350,11 +521,12 @@ def ensure_bark_wav():
                 )
                 samples.append(int(max(-1.0, min(1.0, v)) * 32767))
 
-        burst(650, 280, 0.10, 0.9)                    # "guk"
-        samples.extend([0] * int(sr * 0.06))          # jeda
-        burst(560, 240, 0.13, 0.9)                    # "guk!"
+        for index, params in enumerate(bursts):
+            if index:
+                samples.extend([0] * int(sr * 0.06))  # jeda antar "guk"
+            burst(*params)
 
-        with wave.open(str(BARK_FILE), "w") as w:
+        with wave.open(str(bark_file(style)), "w") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(sr)
@@ -363,12 +535,16 @@ def ensure_bark_wav():
         pass
 
 
-def bark(root):
+def bark(root, style=DEFAULT_SOUND):
+    if style == "senyap":
+        return
+
     def _go():
         try:
-            if HAS_SOUND and BARK_FILE.exists():
+            path = bark_file(style)
+            if HAS_SOUND and path.exists():
                 winsound.PlaySound(
-                    str(BARK_FILE),
+                    str(path),
                     winsound.SND_FILENAME | winsound.SND_ASYNC,
                 )
             elif HAS_SOUND:
@@ -480,7 +656,7 @@ class DogiPet:
         return pal
 
     def set_state(self, state, duration=None):
-        if self.state == "fetch" and state != "fetch":
+        if self.state == "fetch" and state not in ("fetch", "hold"):
             self.fetch_bone = None
         self.state = state
         self.frame_i = 0
@@ -493,6 +669,8 @@ class DogiPet:
                 "chase": 60,
                 "fetch": 999999,
                 "dig":   20,
+                "hold":  999999,
+                "type":  20,
                 "eat":   22,
                 "think": 999999,
                 "jump":  len(JUMP_ARC),
@@ -560,7 +738,9 @@ class DogiPet:
         frame = FRAMES[self.state][self.frame_i % 2]
         if self.facing == -1 and self.state != "sleep":
             frame = mirror(frame)
-        if self.state in ("idle", "walk", "chase", "fetch", "think", "dig"):
+        if self.state in (
+            "idle", "walk", "chase", "fetch", "think", "dig", "type",
+        ):
             frame = self._shift_eyes(frame, cx, cy)
         for gy, row in enumerate(frame):
             for gx, ch in enumerate(row):
@@ -587,16 +767,25 @@ class DogiPet:
 
     # ---------------------------------------------------------------- logika
     def tick(self, now, cx, cy, typing, thinking):
+        # Drag punya prioritas tertinggi: jangan biarkan status agent, typing,
+        # atau pergerakan otomatis menimpa pose Dogi yang sedang digendong.
+        if self._drag_start and self._moved:
+            if self.state != "hold":
+                self.set_state("hold")
+            self.blink = False
+            self.frame_i += 1
+            return
+
         # status agent AI (prioritas tertinggi)
         if thinking and self.state not in ("think", "jump"):
             self.set_state("think")
         elif not thinking and self.state == "think":
             self.set_state("idle")
 
-        # mengetik -> Dogi ikut sibuk: menggali dengan semangat
-        if typing and self.state in ("idle", "walk", "sleep"):
-            self.set_state("dig")
-        if self.state == "dig" and not typing \
+        # mengetik -> Dogi ikut mengetik di laptop mininya
+        if typing and self.state in ("idle", "walk", "sleep", "dig"):
+            self.set_state("type")
+        if self.state == "type" and not typing \
                 and now - self.app.last_key_time > 2.0:
             self.set_state("idle")
 
@@ -635,9 +824,10 @@ class DogiPet:
                 self.x = target
                 self.app.remove_bone(self.fetch_bone)
                 self.fetch_bone = None
-                bark(self.app.root)
+                bark(self.app.root, self.app.sound_style)
                 self.show_msg("Nyam nyam!", 3)
                 self.set_state("eat")
+                self.app.on_fed()
 
         elif self.state == "jump":
             i = len(JUMP_ARC) - self.state_timer
@@ -647,7 +837,7 @@ class DogiPet:
         # batas layar & kedipan
         self.x = max(0, min(self.app.screen_w - CANVAS_W, self.x))
         self.blink = (
-            self.state in ("idle", "dig", "think")
+            self.state in ("idle", "dig", "type", "think")
             and random.random() < 0.08
         )
 
@@ -659,38 +849,49 @@ class DogiPet:
                 self.set_state("happy", 8)
             elif self.state == "eat":
                 self.set_state("happy")
-            elif self.state in ("sleep", "happy", "dig"):
+            elif self.state in ("sleep", "happy", "dig", "type"):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch"):
                 nxt = random.choices(
-                    ["idle", "walk", "sleep"], weights=[4, 4, 1]
+                    ["idle", "walk", "sleep", "dig"],
+                    weights=self.app.state_weights(),
                 )[0]
                 self.set_state(nxt)
 
-        self.frame_i += 2 if self.state == "dig" else 1
+        self.frame_i += 1
 
     # ------------------------------------------------------------- interaksi
     def _on_press(self, e):
         self._drag_start = (e.x_root, e.y_root, self.x, self.y)
         self._moved = False
+        self._pre_drag_state = self.state
 
     def _on_drag(self, e):
         if not self._drag_start:
             return
         sx, sy, ox, oy = self._drag_start
         dx, dy = e.x_root - sx, e.y_root - sy
-        if abs(dx) + abs(dy) > 4:
+        if abs(dx) + abs(dy) > 4 and not self._moved:
             self._moved = True
-        self.x = ox + dx
-        self.y = oy + dy
+            self.set_state("hold")
+        self.x = max(0, min(self.app.screen_w - CANVAS_W, ox + dx))
+        self.y = max(0, min(self.app.screen_h - CANVAS_H, oy + dy))
         self.place()
 
     def _on_release(self, e):
         if not self._moved:
             self.set_state("happy")
+            self.app.on_petted()
         else:
             self.ground_y = self.y
+            if self._pre_drag_state == "fetch" and self.fetch_bone:
+                self.set_state("fetch")
+            elif self.app.agent_thinking:
+                self.set_state("think")
+            else:
+                self.set_state("happy", 8)
         self._drag_start = None
+        self._pre_drag_state = None
 
     def _set_theme(self, name):
         self.theme = name
@@ -824,6 +1025,7 @@ class ControlCenter:
         self.status_var = tk.StringVar(value="DOGI AKTIF DI DESKTOP")
         self.pomodoro_var = tk.StringVar(value="SIAP UNTUK SESI FOKUS")
         self.theme_var = tk.StringVar(value=app.theme)
+        self._hook_state = (0.0, False)  # (kapan dicek, terpasang?)
 
         self.pages = {}
         self.nav_buttons = {}
@@ -832,6 +1034,7 @@ class ControlCenter:
         self._build_home_page()
         self._build_customize_page()
         self._build_focus_page()
+        self._build_agent_page()
         self._build_updates_page()
         self._build_about_page()
         self.show_page("HOME")
@@ -934,6 +1137,7 @@ class ControlCenter:
             ("HOME", "BERANDA"),
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
+            ("AGENT", "AGENT AI"),
             ("UPDATES", "PEMBARUAN"),
             ("ABOUT", "TENTANG"),
         ):
@@ -955,7 +1159,7 @@ class ControlCenter:
             justify="left",
         ).pack(side="bottom", anchor="w", padx=10, pady=8)
 
-        self.content = tk.Frame(body, bg=self.BG, width=680, height=520)
+        self.content = tk.Frame(body, bg=self.BG, width=680, height=620)
         self.content.pack(side="left", fill="both", expand=True, padx=18, pady=18)
         self.content.pack_propagate(False)
 
@@ -1013,8 +1217,33 @@ class ControlCenter:
             self._button(actions, text, command, accent=accent, width=24).pack(
                 padx=18, pady=5, fill="x"
             )
+
+        self._label(actions, "KONDISI DOGI", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(14, 6)
+        )
+        self.stat_bars = {}
+        for key, label in (
+            ("kenyang", "KENYANG"),
+            ("energi", "ENERGI"),
+            ("senang", "SENANG"),
+        ):
+            row = tk.Frame(actions, bg=self.PANEL)
+            row.pack(fill="x", padx=18, pady=3)
+            self._label(row, label, 7, self.MUTED, width=8, anchor="w").pack(
+                side="left"
+            )
+            bar = tk.Canvas(
+                row,
+                width=136,
+                height=10,
+                bg=self.PANEL_ALT,
+                highlightthickness=0,
+            )
+            bar.pack(side="right")
+            self.stat_bars[key] = bar
+
         self.pet_count_label = self._label(actions, "", 8, self.MUTED)
-        self.pet_count_label.pack(side="bottom", pady=18)
+        self.pet_count_label.pack(side="bottom", pady=8)
 
     def _build_customize_page(self):
         page = self._new_page(
@@ -1046,7 +1275,7 @@ class ControlCenter:
         )
 
         theme_card = self._card(page)
-        theme_card.pack(fill="both", expand=True)
+        theme_card.pack(fill="x")
         self._label(theme_card, "WARNA BULU", 8, self.MUTED, bold=True).pack(
             anchor="w", padx=18, pady=(14, 4)
         )
@@ -1057,7 +1286,7 @@ class ControlCenter:
             self.MUTED,
         ).pack(anchor="w", padx=18, pady=(0, 12))
         grid = tk.Frame(theme_card, bg=self.PANEL)
-        grid.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        grid.pack(fill="x", padx=14, pady=(0, 14))
         for index, name in enumerate(COLOR_THEMES):
             swatch = COLOR_THEMES[name]["o"]
             button = tk.Button(
@@ -1073,13 +1302,37 @@ class ControlCenter:
                 cursor="hand2",
                 font=("Consolas", 11, "bold"),
                 padx=14,
-                pady=16,
+                pady=8,
                 anchor="w",
             )
-            button.grid(row=index // 2, column=index % 2, padx=4, pady=4, sticky="ew")
+            button.grid(row=index // 2, column=index % 2, padx=4, pady=3, sticky="ew")
             self.theme_buttons[name] = button
         grid.grid_columnconfigure(0, weight=1)
         grid.grid_columnconfigure(1, weight=1)
+
+        sound_card = self._card(page)
+        sound_card.pack(fill="x", pady=(12, 0))
+        self._label(sound_card, "SUARA GONGGONGAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(14, 4)
+        )
+        self._label(
+            sound_card,
+            "Pilih gaya suara Dogi; langsung diputar sebagai pratinjau.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        sound_row = tk.Frame(sound_card, bg=self.PANEL)
+        sound_row.pack(fill="x", padx=14, pady=(0, 14))
+        self.sound_buttons = {}
+        for style in SOUND_CHOICES:
+            button = self._button(
+                sound_row,
+                style.upper(),
+                lambda value=style: self.app.set_sound_style(value),
+                width=9,
+            )
+            button.pack(side="left", padx=4, expand=True, fill="x")
+            self.sound_buttons[style] = button
 
     def _build_focus_page(self):
         page = self._new_page(
@@ -1129,6 +1382,93 @@ class ControlCenter:
             width=12,
         )
         self.stretch_button.pack(side="right")
+
+        rest_row = tk.Frame(habits, bg=self.PANEL)
+        rest_row.pack(fill="x", padx=18, pady=8)
+        rest_copy = tk.Frame(rest_row, bg=self.PANEL)
+        rest_copy.pack(side="left", fill="x", expand=True)
+        self._label(rest_copy, "AJAK ISTIRAHAT", 11, bold=True).pack(anchor="w")
+        self.rest_desc_label = self._label(rest_copy, "", 8, self.MUTED)
+        self.rest_desc_label.pack(anchor="w", pady=(3, 0))
+        self.rest_button = self._button(
+            rest_row,
+            "",
+            self.app.toggle_rest_reminder,
+            width=12,
+        )
+        self.rest_button.pack(side="right")
+
+        limit_row = tk.Frame(habits, bg=self.PANEL)
+        limit_row.pack(fill="x", padx=18, pady=(0, 14))
+        self._label(limit_row, "BATAS NONSTOP", 8, self.MUTED, bold=True).pack(
+            side="left"
+        )
+        self.rest_limit_buttons = {}
+        for minutes in reversed(REST_CHOICES):
+            button = self._button(
+                limit_row,
+                f"{minutes} MNT",
+                lambda value=minutes: self.app.set_rest_after(value),
+                width=8,
+            )
+            button.pack(side="right", padx=3)
+            self.rest_limit_buttons[minutes] = button
+
+    def _build_agent_page(self):
+        page = self._new_page(
+            "AGENT",
+            "DOGI IKUT MENGAWAL AGENT-MU.",
+            "Muka mikir saat agent bekerja, perayaan saat tugas selesai.",
+        )
+
+        setup = self._card(page)
+        setup.pack(fill="x", pady=(0, 12))
+        self._label(setup, "INTEGRASI CLAUDE CODE", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 4)
+        )
+        self.hook_status_label = self._label(setup, "", 15, bold=True)
+        self.hook_status_label.pack(anchor="w", padx=18)
+        self._label(
+            setup,
+            f"Hook ditulis ke {agent_hooks.SETTINGS_FILE}",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", padx=18, pady=(4, 0))
+        self.hook_button = self._button(
+            setup,
+            "PASANG HOOK",
+            self._toggle_claude_hook,
+            accent=True,
+            width=24,
+        )
+        self.hook_button.pack(anchor="w", padx=18, pady=(12, 18))
+
+        info = self._card(page)
+        info.pack(fill="both", expand=True)
+        self._label(info, "CARA KERJA", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 8)
+        )
+        self._label(
+            info,
+            "Claude Code memanggil DogiPet saat kamu mengirim prompt (thinking)\n"
+            "dan saat agent selesai menjawab (done). Status hanya ditulis lokal ke\n"
+            "~/.dogi/agent_status.json — tanpa mengirim data ke mana pun.",
+            9,
+            self.TEXT,
+            justify="left",
+        ).pack(anchor="w", padx=18)
+        self._label(
+            info,
+            "AGENT LAIN? PANGGIL:  python dogi_hook.py thinking|done",
+            8,
+            self.MUTED,
+        ).pack(anchor="w", padx=18, pady=(12, 0))
+        self._button(
+            info,
+            "UJI PERAYAAN",
+            lambda: self.app.celebrate_all("Guk guk! Tugas selesai!"),
+            width=24,
+        ).pack(anchor="w", padx=18, pady=(14, 18))
 
     def _build_updates_page(self):
         page = self._new_page(
@@ -1278,6 +1618,25 @@ class ControlCenter:
         if self.app.pets:
             self.app.pets[0].set_state("happy")
             self.app.pets[0].show_msg("Senang!", 2)
+            self.app.on_petted()
+
+    def _toggle_claude_hook(self):
+        try:
+            if agent_hooks.is_installed():
+                agent_hooks.uninstall()
+                message = "Hook Claude Code dilepas."
+            else:
+                agent_hooks.install()
+                message = (
+                    "Hook terpasang! Kirim prompt di Claude Code dan lihat "
+                    "Dogi ikut berpikir."
+                )
+        except agent_hooks.HookError as exc:
+            messagebox.showerror("Integrasi Claude Code", str(exc))
+            return
+        self._hook_state = (0.0, False)  # paksa pengecekan ulang
+        self.sync_from_app()
+        messagebox.showinfo("Integrasi Claude Code", message)
 
     def _sleep_primary(self):
         if self.app.pets:
@@ -1328,6 +1687,55 @@ class ControlCenter:
         self.stable_button.configure(
             bg=self.ACCENT if not continuous else self.PANEL_ALT,
             fg=self.DARK if not continuous else self.TEXT,
+        )
+
+        for style, button in self.sound_buttons.items():
+            selected = style == self.app.sound_style
+            button.configure(
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+        self.rest_button.configure(
+            text="ON" if self.app.rest_reminder_on else "OFF",
+            bg=self.ACCENT if self.app.rest_reminder_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.rest_reminder_on else self.TEXT,
+        )
+        self.rest_desc_label.configure(
+            text=(
+                f"Dogi mengajakmu rehat setelah {self.app.rest_after_min} "
+                "menit aktif nonstop."
+            )
+        )
+        for minutes, button in self.rest_limit_buttons.items():
+            selected = minutes == self.app.rest_after_min
+            button.configure(
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+
+        for key, bar in self.stat_bars.items():
+            value = self.app.stats.get(key, 0)
+            width = int(int(bar.cget("width")) * value / STAT_MAX)
+            color = self.ACCENT if value >= NEED_LOW else "#e2574c"
+            bar.delete("all")
+            if width > 0:
+                bar.create_rectangle(
+                    0, 0, width, int(bar.cget("height")),
+                    fill=color, outline=color,
+                )
+
+        checked_at, installed = self._hook_state
+        if time.time() - checked_at > 5:
+            installed = agent_hooks.is_installed()
+            self._hook_state = (time.time(), installed)
+        self.hook_status_label.configure(
+            text="HOOK TERPASANG" if installed else "HOOK BELUM TERPASANG",
+            fg=self.ACCENT if installed else self.TEXT,
+        )
+        self.hook_button.configure(
+            text="LEPAS HOOK" if installed else "PASANG HOOK",
+            bg=self.PANEL_ALT if installed else self.ACCENT,
+            fg=self.TEXT if installed else self.DARK,
         )
 
     def _refresh_loop(self):
@@ -1382,6 +1790,14 @@ class DogiApp:
         self.agent_thinking = False
         self._status_mtime = 0
         self._last_done_ts = 0
+        # status lama tidak dirayakan ulang setiap aplikasi dibuka
+        try:
+            stale = json.loads(STATUS_FILE.read_text())
+            self._status_mtime = STATUS_FILE.stat().st_mtime
+            self._last_done_ts = float(stale.get("ts") or 0)
+            self.agent_thinking = stale.get("status") == "thinking"
+        except Exception:
+            pass
         self.last_key_time = 0
         self.last_cursor = (0, 0)
         self._friend_cd = 0
@@ -1394,9 +1810,24 @@ class DogiApp:
         self.show_control_center_on_start = True
         self.control_center = None
 
+        self.stats = dict(DEFAULT_STATS)
+        self._last_stats_tick = time.time()
+        self._stats_saved = time.time()
+        self._nag_cd = 0.0
+        self._clock_cd = 0.0
+        self.last_greet_date = ""
+        self.last_lunch_date = ""
+
+        self.sound_style = DEFAULT_SOUND
+        self.rest_reminder_on = True
+        self.rest_after_min = 60
+        self.activity = ActivityMonitor()
+        self._rest_nag_at = 0.0
+        self._rest_exceeded = False
+
         self.theme = "Shiba"
         self._load_config()
-        ensure_bark_wav()
+        ensure_bark_wav(self.sound_style)
 
         if HAS_PYNPUT:
             listener = _pynput_keyboard.Listener(on_press=self._on_key)
@@ -1432,6 +1863,21 @@ class DogiApp:
             self.show_control_center_on_start = bool(
                 cfg.get("show_control_center_on_start", True)
             )
+            if cfg.get("sound_style") in SOUND_CHOICES:
+                self.sound_style = cfg["sound_style"]
+            self.rest_reminder_on = bool(cfg.get("rest_reminder", True))
+            if cfg.get("rest_after_min") in REST_CHOICES:
+                self.rest_after_min = cfg["rest_after_min"]
+            raw_stats = cfg.get("stats") or {}
+            for key in self.stats:
+                if isinstance(raw_stats.get(key), (int, float)):
+                    self.stats[key] = clamp_stat(raw_stats[key])
+            stats_ts = cfg.get("stats_ts")
+            if isinstance(stats_ts, (int, float)) and stats_ts < time.time():
+                offline_minutes = (time.time() - stats_ts) / 60
+                self.stats = offline_decay(self.stats, offline_minutes)
+            self.last_greet_date = str(cfg.get("last_greet_date") or "")
+            self.last_lunch_date = str(cfg.get("last_lunch_date") or "")
         except Exception:
             pass
 
@@ -1448,6 +1894,13 @@ class DogiApp:
                         "update_channel": self.update_channel,
                         "pet_name": self.pet_name,
                         "show_control_center_on_start": self.show_control_center_on_start,
+                        "sound_style": self.sound_style,
+                        "rest_reminder": self.rest_reminder_on,
+                        "rest_after_min": self.rest_after_min,
+                        "stats": {k: round(v, 2) for k, v in self.stats.items()},
+                        "stats_ts": time.time(),
+                        "last_greet_date": self.last_greet_date,
+                        "last_lunch_date": self.last_lunch_date,
                     },
                     indent=2,
                 ),
@@ -1485,9 +1938,100 @@ class DogiApp:
             self.agent_thinking = False
             self.celebrate_all("Guk guk! Tugas selesai!")
 
+    # ------------------------------------------------------- kebutuhan & jam
+    def on_fed(self):
+        self.stats["kenyang"] = clamp_stat(self.stats["kenyang"] + 35)
+        self.stats["senang"] = clamp_stat(self.stats["senang"] + 8)
+
+    def on_petted(self):
+        self.stats["senang"] = clamp_stat(self.stats["senang"] + 10)
+
+    def state_weights(self):
+        """Bobot pilihan state idle/walk/sleep/dig sesuai jam dan kondisi."""
+        idle, walk, sleep, dig = 4, 4, 1, 1
+        if is_night(time.localtime().tm_hour):
+            idle, walk, sleep, dig = 2, 1, 6, 0
+        if self.stats["energi"] < NEED_LOW:
+            sleep += 4
+            walk = max(1, walk - 2)
+        if self.stats["senang"] < NEED_LOW:
+            walk = max(1, walk - 1)  # lesu, malas jalan-jalan
+        return [idle, walk, sleep, dig]
+
+    def _update_stats(self, now):
+        minutes = (now - self._last_stats_tick) / 60
+        self._last_stats_tick = now
+        if minutes <= 0:
+            return
+        sleeping = bool(self.pets) and self.pets[0].state == "sleep"
+        self.stats = decay_stats(self.stats, minutes, sleeping=sleeping)
+        if now - self._stats_saved > 60:
+            self._stats_saved = now
+            self.save_config()
+
+    def _check_needs(self, now):
+        """Dogi merengek lewat bubble saat ada kebutuhan yang rendah."""
+        if now < self._nag_cd or not self.pets:
+            return
+        pet = self.pets[0]
+        if pet.state not in ("idle", "walk", "dig"):
+            return
+        if self.stats["kenyang"] < NEED_LOW:
+            msg = random.choice(("Aku lapar...", "Ada tulang, nggak?"))
+        elif self.stats["energi"] < NEED_LOW:
+            msg = "Ngantuk banget..."
+        elif self.stats["senang"] < NEED_LOW:
+            msg = "Elus aku dong..."
+        else:
+            return
+        pet.show_msg(msg, 4)
+        self._nag_cd = now + NAG_COOLDOWN
+
+    def _check_rest(self, now, active):
+        """Ajak istirahat bila pengguna aktif nonstop melewati ambang."""
+        minutes = self.activity.update(now, active)
+        if not self.rest_reminder_on:
+            self._rest_exceeded = False
+            self._rest_nag_at = 0.0
+            return
+        if minutes >= self.rest_after_min and now >= self._rest_nag_at:
+            self._rest_nag_at = now + REST_NAG_EVERY_S
+            self._rest_exceeded = True
+            if self.pets:
+                pet = self.pets[0]
+                pet.show_msg(f"Sudah {int(minutes)} menit. Rehat, yuk!", 8)
+                if pet.state in ("idle", "walk", "dig", "type"):
+                    pet.set_state("happy")  # lompat kecil minta perhatian
+            bark(self.root, self.sound_style)
+        elif self._rest_exceeded and minutes == 0:
+            self._rest_exceeded = False
+            self._rest_nag_at = 0.0
+            if self.pets:
+                self.pets[0].set_state("happy")
+                self.pets[0].show_msg("Segar lagi! Guk!", 5)
+
+    def _check_clock(self, now):
+        """Sapaan pagi sekali sehari dan pengingat makan siang."""
+        if now < self._clock_cd:
+            return
+        self._clock_cd = now + 10
+        local = time.localtime(now)
+        today = time.strftime("%Y-%m-%d", local)
+        if is_morning(local.tm_hour) and self.last_greet_date != today:
+            self.last_greet_date = today
+            if self.pets:
+                self.pets[0].show_msg("Selamat pagi! Guk!", 6)
+                self.pets[0].set_state("happy")
+            self.save_config()
+        elif local.tm_hour == LUNCH_HOUR and self.last_lunch_date != today:
+            self.last_lunch_date = today
+            if self.pets:
+                self.pets[0].show_msg("Waktunya makan siang!", 6)
+            self.save_config()
+
     # ------------------------------------------------------------- aksi
     def celebrate_all(self, msg):
-        bark(self.root)
+        bark(self.root, self.sound_style)
         for i, pet in enumerate(self.pets):
             pet.celebrate(msg if i == 0 else None)
 
@@ -1509,6 +2053,39 @@ class DogiApp:
         self.stretch_on = not self.stretch_on
         self.last_stretch = time.time()
         self.save_config()
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def toggle_rest_reminder(self):
+        self.rest_reminder_on = not self.rest_reminder_on
+        self._rest_nag_at = 0.0
+        self.save_config()
+        if self.pets:
+            status = "aktif" if self.rest_reminder_on else "nonaktif"
+            self.pets[0].show_msg(f"Ajak istirahat {status}", 3)
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def set_rest_after(self, minutes):
+        if minutes not in REST_CHOICES:
+            return
+        self.rest_after_min = minutes
+        self._rest_nag_at = 0.0
+        self.save_config()
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def set_sound_style(self, style):
+        if style not in SOUND_CHOICES:
+            return
+        self.sound_style = style
+        ensure_bark_wav(style)
+        self.save_config()
+        if self.pets:
+            self.pets[0].show_msg(
+                "Senyap, ya..." if style == "senyap" else "Guk guk!", 2
+            )
+        bark(self.root, style)  # pratinjau langsung
         if self.control_center:
             self.control_center.sync_from_app()
 
@@ -1659,6 +2236,9 @@ class DogiApp:
 
         self._poll_agent_status()
         self._poll_update_events()
+        self._update_stats(now)
+        self._check_clock(now)
+        self._check_needs(now)
 
         if self.pomo_end and now >= self.pomo_end:
             self.pomo_end = None
@@ -1671,6 +2251,10 @@ class DogiApp:
             self.celebrate_all("Peregangan dulu, yuk!")
 
         typing = HAS_PYNPUT and (now - self.last_key_time) < 1.2
+        moved = (
+            abs(cx - self.last_cursor[0]) + abs(cy - self.last_cursor[1]) > 3
+        )
+        self._check_rest(now, typing or moved)
 
         for pet in self.pets:
             pet.tick(now, cx, cy, typing, self.agent_thinking)
@@ -1685,6 +2269,7 @@ class DogiApp:
         self.root.after(TICK_MS, self._tick)
 
     def quit(self):
+        self.save_config()
         self.root.destroy()
 
     def run(self):
@@ -1692,6 +2277,12 @@ class DogiApp:
 
 
 if __name__ == "__main__":
+    if "--hook" in sys.argv:
+        # dipanggil dari hook Claude Code pada build frozen; tanpa UI
+        index = sys.argv.index("--hook")
+        status = sys.argv[index + 1] if index + 1 < len(sys.argv) else "done"
+        dogi_hook.write_status(status)
+        raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
     application = DogiApp(smoke_test=is_smoke_test)
     if is_smoke_test:

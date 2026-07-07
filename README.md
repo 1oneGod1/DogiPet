@@ -16,18 +16,27 @@ Windows `DogiPet.exe` dan installer `DogiPet-Setup.exe`. Saat aplikasi dibuka,
 Control Center native tampil untuk mengatur Dogi; jendela bisa disembunyikan
 sementara desktop pet tetap aktif.
 
-![DogiPet Control Center](qa/control-center-v020.png)
+![DogiPet Control Center](qa/control-center-v030.png)
 
 ## Fitur saat ini
 
 - Mata mengikuti kursor dan berkedip.
 - Mengejar kursor yang bergerak cepat.
-- Bereaksi saat keyboard dipakai.
-- Klik untuk mengelus dan drag untuk memindahkan Dogi.
+- Ikut mengetik di laptop mini saat kamu mengetik.
+- Mengajak istirahat bila kamu terdeteksi aktif nonstop terlalu lama
+  (ambang 45/60/90 menit bisa diatur di halaman Fokus).
+- Klik untuk mengelus; saat di-drag Dogi berubah ke pose digendong dengan kaki
+  berayun, lalu mendarat ceria ketika dilepas.
 - Beri tulang, tambah hingga empat Dogi, dan interaksi antarteman.
-- Enam tema warna bulu.
+- Kebutuhan Dogi (kenyang, energi, senang) yang memengaruhi tingkahnya —
+  beri tulang, elus, dan biarkan ia tidur agar tetap ceria.
+- Sadar waktu: sapaan selamat pagi, pengingat makan siang, dan lebih sering
+  tidur di malam hari.
+- Enam tema warna bulu dan empat gaya suara gonggongan (Klasik, Kecil,
+  Besar, Senyap) dengan pratinjau di halaman Tampilan.
 - Timer Pomodoro dan pengingat peregangan.
-- Reaksi status AI agent melalui `dogi_hook.py`.
+- Reaksi status AI agent, dengan pemasangan hook Claude Code sekali klik
+  dari Control Center (halaman Agent AI).
 - Control Center native untuk preview, aksi cepat, personalisasi, fokus, dan
   pengaturan pembaruan.
 - Installer Windows dengan pilihan startup.
@@ -92,7 +101,12 @@ menerbitkan aset yang diperlukan updater.
 
 ## Integrasi AI agent
 
-Jalankan perintah berikut dari hook editor atau agent pilihanmu:
+Cara termudah: buka Control Center → halaman **Agent AI** → **PASANG HOOK**.
+DogiPet menulis hook `UserPromptSubmit` (thinking) dan `Stop` (done) ke
+`~/.claude/settings.json` tanpa mengusik hook lain, dan bisa dilepas kembali
+dari tombol yang sama.
+
+Untuk agent atau editor lain, jalankan perintah berikut dari hook pilihanmu:
 
 ```powershell
 python dogi_hook.py thinking
@@ -114,7 +128,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>
