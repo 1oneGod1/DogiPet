@@ -28,6 +28,7 @@ Tested: Windows 10/11. pynput opsional.
 
 import tkinter as tk
 from tkinter import messagebox
+import os
 import random
 import sys
 import json
@@ -41,6 +42,7 @@ import webbrowser
 
 import agent_hooks
 import dogi_hook
+import startup as startup_registry
 from build_info import BUILD_ID
 from updater import RELEASE_PAGE, UpdateInfo, UpdateManager, launch_installer
 from version import VERSION
@@ -70,11 +72,43 @@ except ImportError:
 SCALE = 5
 TICK_MS = 110
 WALK_SPEED = 3
+VWALK_SPEED = 2            # kecepatan jalan vertikal (naik/turun layar)
+VCHASE_SPEED = 6
 FETCH_SPEED = 7
 CHASE_SPEED = 9
 ZOOM_SPEED = 12
+POUNCE_SPEED = 13
 CHASE_RANGE = 350
+CURSOR_GLANCE_RANGE = 700
+CURSOR_REACTION_COOLDOWN = 1.8
+CURSOR_CHASE_COOLDOWN = 14.0
+CURSOR_CHASE_CHANCE = 0.16
+CURSOR_POUNCE_CHANCE = 0.12   # peluang menerkam kursor, bukan cuma melirik
+ROAM_TOP_MARGIN = 80       # batas atas jelajah agar tidak menutupi menu bar
+ROAM_BOTTOM_MARGIN = 40
+MISCHIEF_MIN_GAP = 55.0    # jeda minimal antar keusilan spontan (detik)
+MISCHIEF_MAX_GAP = 120.0
+THINK_WATCHDOG_S = 300.0        # auto-lepas dari 'think' bila status nyangkut
+THINK_STARTUP_FRESH_S = 120.0   # status 'thinking' lama saat start diabaikan
 TRANSPARENT = "#ff00fe"
+
+# Pesan usil Dogi (dipakai perilaku keusilan & terkam kursor)
+POUNCE_MESSAGES = (
+    "Hap! Dapat kursornya!",
+    "Kena kamu! :P",
+    "Awas, kuterkam!",
+)
+MISCHIEF_MESSAGES = (
+    "Main dulu yuk, jangan kerja terus~",
+    "Bosen nih, temani aku dong!",
+    "Ssst... lihat aku, lihat aku!",
+    "Ayo lempar bola!",
+    "Aku mau kabur bawa sandalmu :P",
+    "Kejar aku kalau bisa!",
+)
+SPIN_MESSAGES = ("Ekorku! Ekorku!", "Muter muter~", "Gak ketangkep-tangkep!")
+SNIFF_MESSAGES = ("Sniff... sniff...", "Bau apa ini?", "Hmm, menarik!")
+PEE_MESSAGES = ("Pipis dulu ya~", "Ssss...", "Nandain wilayah!")
 
 GRID_W, GRID_H = 16, 12
 PIXEL_SPR_W, PIXEL_SPR_H = GRID_W * SCALE, GRID_H * SCALE
@@ -95,12 +129,128 @@ FRIEND_COOLDOWN = 25       # detik jeda antar sapaan
 CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
+_SINGLE_INSTANCE_MUTEX = None
+_SINGLE_INSTANCE_LOCK = None
+_SINGLE_INSTANCE_PID_FILE = CONF_DIR / "dogipet.pid"
 
 
 def resource_path(*parts):
     """Resolve bundled assets in source runs and PyInstaller builds."""
     base = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent))
     return base.joinpath(*parts)
+
+
+def windows_pid_running(pid):
+    """True jika PID Windows masih hidup dan bisa dibuka."""
+    if not sys.platform.startswith("win") or pid <= 0:
+        return False
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    except Exception:
+        return False
+
+
+def acquire_single_instance(smoke_test=False):
+    """Pastikan hanya satu DogiPet interaktif yang berjalan di Windows."""
+    global _SINGLE_INSTANCE_MUTEX, _SINGLE_INSTANCE_LOCK
+    if smoke_test or not sys.platform.startswith("win"):
+        return True
+    try:
+        import atexit
+        import os
+
+        CONF_DIR.mkdir(exist_ok=True)
+        lock_path = _SINGLE_INSTANCE_PID_FILE
+        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+        while True:
+            try:
+                fd = os.open(str(lock_path), flags)
+                break
+            except FileExistsError:
+                try:
+                    pid = int(lock_path.read_text(encoding="ascii").strip())
+                except Exception:
+                    pid = 0
+                if pid and windows_pid_running(pid):
+                    return False
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+        _SINGLE_INSTANCE_LOCK = fd
+        os.write(fd, str(os.getpid()).encode("ascii"))
+
+        def release_lock():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                if lock_path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    lock_path.unlink()
+            except OSError:
+                pass
+
+        atexit.register(release_lock)
+        return True
+    except Exception:
+        # Jika PID-file gagal karena izin/path aneh, jatuh ke mutex Windows.
+        pass
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p,
+        ]
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        handle = kernel32.CreateMutexW(
+            None, False, "Local\\DogiPetDesktopCompanion"
+        )
+        if not handle:
+            return True
+        _SINGLE_INSTANCE_MUTEX = handle
+        return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
+def virtual_desktop_bounds(root):
+    """Return the whole Windows desktop, including monitors left/above zero."""
+    if sys.platform.startswith("win"):
+        try:
+            user32 = ctypes.windll.user32
+            left = int(user32.GetSystemMetrics(76))
+            top = int(user32.GetSystemMetrics(77))
+            width = int(user32.GetSystemMetrics(78))
+            height = int(user32.GetSystemMetrics(79))
+            if width > 0 and height > 0:
+                return left, top, left + width, top + height
+        except (AttributeError, NameError, OSError, ValueError):
+            pass
+    width = int(root.winfo_screenwidth())
+    height = int(root.winfo_screenheight())
+    return 0, 0, width, height
+
+
+def app_desktop_bounds(app):
+    """Compatibility helper for tests and older app objects."""
+    left = int(getattr(app, "screen_left", 0))
+    top = int(getattr(app, "screen_top", 0))
+    right = int(getattr(app, "screen_right", left + app.screen_w))
+    bottom = int(getattr(app, "screen_bottom", top + app.screen_h))
+    return left, top, right, bottom
+
+
+def window_geometry(width, height, x, y):
+    """Tk geometry with explicit signs, required for negative monitor coords."""
+    return f"{int(width)}x{int(height)}{int(x):+d}{int(y):+d}"
 
 # gaya gonggongan: deretan (frek awal, frek akhir, durasi, volume)
 BARK_STYLES = {
@@ -192,10 +342,10 @@ REST_CHOICES = (45, 60, 90)   # pilihan ambang menit nonstop
 
 # ---------------------------------------------- reaksi scroll & video meeting
 SCROLL_REACTION_SECONDS = 0.9
-CURSOR_SWING_MIN_RUN = 55
-CURSOR_SWING_WINDOW_SECONDS = 2.6
-CURSOR_SWING_REVERSALS = 4
-DIZZY_COOLDOWN_SECONDS = 8.0
+CURSOR_SWING_MIN_RUN = 130
+CURSOR_SWING_WINDOW_SECONDS = 2.4
+CURSOR_SWING_REVERSALS = 7
+DIZZY_COOLDOWN_SECONDS = 30.0
 MEETING_POLL_SECONDS = 2.0
 MEETING_LOST_GRACE_SECONDS = 8.0
 MEETING_WATCH_EVERY_SECONDS = 3 * 60
@@ -340,6 +490,74 @@ def visible_meeting_windows():
         return sorted(candidates, key=lambda item: item["area"], reverse=True)
     except (AttributeError, OSError, ValueError):
         return []
+
+
+def rect_covers_monitor(window, monitor, tol=2):
+    """True bila persegi jendela menutupi (nyaris) seluruh area monitor."""
+    wl, wt, wr, wb = window
+    ml, mt, mr, mb = monitor
+    return (
+        wl <= ml + tol and wt <= mt + tol
+        and wr >= mr - tol and wb >= mb - tol
+        and (wr - wl) > 0 and (wb - wt) > 0
+    )
+
+
+def foreground_fullscreen_active():
+    """Deteksi aplikasi fullscreen di depan (presentasi, video, game, share).
+
+    Hanya membaca geometri jendela terdepan vs monitornya; tidak menyentuh isi
+    aplikasi. Jendela shell/desktop dan jendela milik DogiPet sendiri diabaikan.
+    """
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        class_buffer = ctypes.create_unicode_buffer(96)
+        user32.GetClassNameW(hwnd, class_buffer, 96)
+        if class_buffer.value in (
+            "Progman", "WorkerW", "Shell_TrayWnd", "Windows.UI.Core.CoreWindow",
+        ):
+            return False
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return False
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+            ]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
+                ("rcWork", RECT), ("dwFlags", wintypes.DWORD),
+            ]
+
+        window_rect = RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
+            return False
+        monitor = user32.MonitorFromWindow(hwnd, 2)  # DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return False
+        m = info.rcMonitor
+        return rect_covers_monitor(
+            (window_rect.left, window_rect.top,
+             window_rect.right, window_rect.bottom),
+            (m.left, m.top, m.right, m.bottom),
+        )
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 class CursorSwingDetector:
@@ -712,6 +930,11 @@ FRAMES = {
     "tail_wag": [DIG_1, DIG_2],
     "beg": [HAPPY_1, HAPPY_2],
     "zoomies": [WALK_1, WALK_2],
+    "glance": [IDLE_1, IDLE_2],
+    "spin": [WALK_1, WALK_2],
+    "pounce": [WALK_1, WALK_2],
+    "sniff": [DIG_1, DIG_2],
+    "pee": [DIG_1, DIG_2],
 }
 
 # Raster sprites imported from the user-approved reference sheet.  FRAMES stays
@@ -733,12 +956,16 @@ SPRITE_FRAME_COUNTS = {
     "meeting_alert": 4,
     "meeting_watch": 4,
     "think": 4,
+    "tail_wag": 4,
     "jump": 4,
     "dizzy": 4,
+    "pee": 4,
 }
-SPRITE_NATIVE_LEFT = {
-    "walk", "chase", "fetch", "sleep", "meeting_alert", "meeting_watch",
-}
+# Seluruh sprite hasil draw_sprites.py digambar menghadap KANAN, jadi tidak ada
+# state yang "asli menghadap kiri". Sprite hanya dicerminkan saat Dogi bergerak
+# ke kiri. (Dulu set ini berisi walk/chase/dsb. warisan lembar sprite lama yang
+# menghadap kiri, sehingga arah jalan tampak terbalik.)
+SPRITE_NATIVE_LEFT = set()
 SPRITE_FRAME_SEQUENCES = {
     # Kembali melewati frame tengah agar kepala tidak melompat dari kanan
     # langsung ke kiri saat siklus animasi bingung dimulai ulang.
@@ -747,9 +974,12 @@ SPRITE_FRAME_SEQUENCES = {
 SPRITE_FRAME_HOLD = {"think": 2}
 SPRITE_STATE_ASSET = {
     "curious": "think",
-    "tail_wag": "dig",
+    "glance": "think",
     "beg": "happy",
     "zoomies": "chase",
+    "spin": "chase",
+    "pounce": "chase",
+    "sniff": "dig",
 }
 
 
@@ -883,7 +1113,7 @@ class Bone:
                         x0, y0, x0 + BONE_SCALE, y0 + BONE_SCALE,
                         fill=FIXED_COLORS["w"], outline="#c9c2b2",
                     )
-        self.win.geometry(f"{BONE_W}x{BONE_H}+{int(x)}+{int(y)}")
+        self.win.geometry(window_geometry(BONE_W, BONE_H, x, y))
 
     def destroy(self):
         try:
@@ -916,7 +1146,8 @@ class DogiPet:
         self.canvas.pack()
 
         self.x = x
-        self.ground_y = app.screen_h - CANVAS_H - 60
+        _, _, _, screen_bottom = app_desktop_bounds(app)
+        self.ground_y = screen_bottom - CANVAS_H - 60
         self.y = self.ground_y
 
         self.state = "idle"
@@ -925,10 +1156,16 @@ class DogiPet:
         self.facing = random.choice([1, -1])
         self.motion_facing = self.facing
         self.target_x = x
+        self.target_y = self.ground_y
         self.blink = False
         self.temp_msg = None
         self.fetch_bone = None
         self._sprite_cache = {}
+        self.gaze_x = self.center_x()
+        self.gaze_y = self.y + SPR_Y
+        self.gaze_until = 0.0
+        self.cursor_reaction_until = 0.0
+        self.chase_cooldown_until = 0.0
 
         self._drag_start = None
         self._moved = False
@@ -943,10 +1180,28 @@ class DogiPet:
     def center_x(self):
         return self.x + CANVAS_W // 2
 
+    def _roam_bounds(self):
+        """Rentang y yang boleh dijelajahi Dogi (jalan vertikal)."""
+        _, screen_top, _, screen_bottom = app_desktop_bounds(self.app)
+        top = screen_top + ROAM_TOP_MARGIN
+        bottom = screen_bottom - CANVAS_H - ROAM_BOTTOM_MARGIN
+        return top, max(top, bottom)
+
+    def _random_roam_target(self, margin=80):
+        left, _, right, _ = app_desktop_bounds(self.app)
+        min_x = left + margin
+        max_x = max(min_x, right - CANVAS_W - margin)
+        top, bottom = self._roam_bounds()
+        return random.randint(min_x, max_x), random.randint(top, bottom)
+
+    def _step_axis(self, current, target, speed):
+        delta = target - current
+        if abs(delta) > speed:
+            return current + speed * (1 if delta > 0 else -1)
+        return target
+
     def place(self):
-        self.win.geometry(
-            f"{CANVAS_W}x{CANVAS_H}+{int(self.x)}+{int(self.y)}"
-        )
+        self.win.geometry(window_geometry(CANVAS_W, CANVAS_H, self.x, self.y))
 
     def palette(self):
         pal = dict(FIXED_COLORS)
@@ -981,22 +1236,28 @@ class DogiPet:
                 "tail_wag": 28,
                 "beg": 24,
                 "zoomies": 999999,
+                "glance": 14,
+                "spin": 30,
+                "pounce": 45,
+                "sniff": 26,
+                "pee": 30,
             }[state]
         self.state_timer = duration
         if state == "walk":
-            margin = 80
-            self.target_x = random.randint(
-                margin, self.app.screen_w - CANVAS_W - margin
-            )
+            self.target_x, self.target_y = self._random_roam_target(80)
             self.facing = 1 if self.target_x > self.x else -1
             self.motion_facing = self.facing
         elif state == "zoomies":
             margin = 40
+            left, _, right, _ = app_desktop_bounds(self.app)
+            middle = (left + right) // 2
             self.target_x = (
-                self.app.screen_w - CANVAS_W - margin
-                if self.center_x() < self.app.screen_w // 2
-                else margin
+                right - CANVAS_W - margin
+                if self.center_x() < middle
+                else left + margin
             )
+            top, bottom = self._roam_bounds()
+            self.target_y = random.randint(top, bottom)
             self.facing = 1 if self.target_x > self.x else -1
             self.motion_facing = self.facing
 
@@ -1065,7 +1326,17 @@ class DogiPet:
         count = SPRITE_FRAME_COUNTS.get(asset_state, 0)
         if not count:
             return None
-        frame_index = sprite_frame_index(asset_state, self.frame_i)
+        if self.state == "glance":
+            # Asset think memiliki mata kiri/atas/kanan. Pilih satu pose dari
+            # arah kursor tanpa membalik atau menggeser seluruh badan Dogi.
+            horizontal = (self.gaze_x - self.center_x()) * self.visual_facing()
+            head_y = self.y + SPR_Y + SPR_H * 0.35
+            frame_index = (
+                1 if self.gaze_y < head_y - 30
+                else (2 if horizontal >= 0 else 0)
+            )
+        else:
+            frame_index = sprite_frame_index(asset_state, self.frame_i)
         mirrored = sprite_is_mirrored(self.state, self.visual_facing())
         key = (self.theme, self.state, frame_index, mirrored)
         if key in self._sprite_cache:
@@ -1135,8 +1406,11 @@ class DogiPet:
             self.frame_i += 1
             return
 
-        # status agent AI (prioritas tertinggi)
-        if thinking and self.state not in ("think", "jump", "meeting_alert"):
+        # status agent AI: fokus "think", tapi main lempar tulang tetap boleh
+        # menembusnya supaya Dogi tak pernah benar-benar terkunci diam.
+        if thinking and self.state not in (
+            "think", "jump", "meeting_alert", "fetch", "eat",
+        ):
             self.set_state("think")
         elif not thinking and self.state == "think":
             self.set_state("idle")
@@ -1144,7 +1418,8 @@ class DogiPet:
         # mengetik -> Dogi ikut mengetik di laptop mininya
         if typing and self.state in (
             "idle", "walk", "sleep", "dig",
-            "curious", "tail_wag", "beg", "zoomies",
+            "curious", "tail_wag", "beg", "zoomies", "glance",
+            "spin", "sniff", "pee",
         ):
             self.set_state("type")
         if self.state == "type" and not typing \
@@ -1156,7 +1431,7 @@ class DogiPet:
         if scrolling and self.app.scroll_reaction_on and self.state in (
             "idle", "walk", "sleep", "dig", "type",
             "curious", "tail_wag", "beg", "zoomies",
-            "scroll_up", "scroll_down",
+            "scroll_up", "scroll_down", "glance", "spin", "sniff", "pee",
         ):
             scroll_state = "scroll_up" if scrolling > 0 else "scroll_down"
             if self.state != scroll_state:
@@ -1164,39 +1439,72 @@ class DogiPet:
         elif self.state in ("scroll_up", "scroll_down") and not scrolling:
             self.set_state("type" if typing else "idle")
 
-        # naluri berburu kursor
-        if self.state in ("idle", "walk"):
+        # Dogi lebih sering hanya melirik. Mengejar adalah reaksi langka dan
+        # memiliki cooldown agar gerakan mouse biasa tidak selalu memanggilnya.
+        if self.state in ("idle", "walk", "glance"):
             speed = (
                 abs(cx - self.app.last_cursor[0])
                 + abs(cy - self.app.last_cursor[1])
             )
-            dist = abs(cx - self.center_x())
-            if speed > 60 and dist < CHASE_RANGE:
-                self.set_state("chase")
+            dist = math.hypot(
+                cx - self.center_x(), cy - (self.y + CANVAS_H // 2)
+            )
+            if speed > 12 and dist < CURSOR_GLANCE_RANGE:
+                self.gaze_x, self.gaze_y = cx, cy
+                self.gaze_until = now + 1.8
+            if speed > 60 and dist < CURSOR_GLANCE_RANGE \
+                    and now >= self.cursor_reaction_until:
+                self.cursor_reaction_until = now + CURSOR_REACTION_COOLDOWN
+                may_chase = (
+                    dist < CHASE_RANGE
+                    and now >= self.chase_cooldown_until
+                    and random.random() < CURSOR_CHASE_CHANCE
+                )
+                may_pounce = (
+                    not may_chase
+                    and dist < CHASE_RANGE
+                    and now >= self.chase_cooldown_until
+                    and random.random() < CURSOR_POUNCE_CHANCE
+                )
+                if may_chase:
+                    self.chase_cooldown_until = now + CURSOR_CHASE_COOLDOWN
+                    self.set_state("chase")
+                elif may_pounce:
+                    self.chase_cooldown_until = now + CURSOR_CHASE_COOLDOWN
+                    self.gaze_x, self.gaze_y = cx, cy
+                    self.set_state("pounce")
+                elif self.state != "glance":
+                    self.set_state("glance")
 
-        # pergerakan
+        # pergerakan (dua sumbu: Dogi bisa jalan mendatar dan vertikal)
         if self.state == "walk":
-            self.x += WALK_SPEED * self.facing
-            if (self.facing == 1 and self.x >= self.target_x) or \
-               (self.facing == -1 and self.x <= self.target_x):
+            self.x = self._step_axis(self.x, self.target_x, WALK_SPEED)
+            self.y = self._step_axis(self.y, self.target_y, VWALK_SPEED)
+            self.ground_y = self.y
+            if self.x == self.target_x and self.y == self.target_y:
                 self.set_state("idle")
 
         elif self.state == "chase":
             target = cx - CANVAS_W // 2
+            top, bottom = self._roam_bounds()
+            target_y = max(top, min(bottom, cy - SPR_Y - SPR_H // 2))
             self.facing = 1 if target > self.x else -1
-            if abs(target - self.x) > CHASE_SPEED:
-                self.x += CHASE_SPEED * self.facing
-            else:
-                self.x = target
+            self.x = self._step_axis(self.x, target, CHASE_SPEED)
+            self.y = self._step_axis(self.y, target_y, VCHASE_SPEED)
+            self.ground_y = self.y
+            if self.x == target and self.y == target_y:
                 self.set_state("happy")
 
         elif self.state == "fetch" and self.fetch_bone:
             target = self.fetch_bone.x - CANVAS_W // 2 + BONE_W // 2
+            target_y = self.fetch_bone.y - (CANVAS_H - BONE_H - 6)
+            top, bottom = self._roam_bounds()
+            target_y = max(top, min(bottom, target_y))
             self.facing = 1 if target > self.x else -1
-            if abs(target - self.x) > FETCH_SPEED:
-                self.x += FETCH_SPEED * self.facing
-            else:
-                self.x = target
+            self.x = self._step_axis(self.x, target, FETCH_SPEED)
+            self.y = self._step_axis(self.y, target_y, VCHASE_SPEED)
+            self.ground_y = self.y
+            if self.x == target and self.y == target_y:
                 self.app.remove_bone(self.fetch_bone)
                 self.fetch_bone = None
                 bark(self.app.root, self.app.sound_style)
@@ -1206,12 +1514,32 @@ class DogiPet:
 
         elif self.state == "zoomies":
             self.facing = 1 if self.target_x > self.x else -1
-            if abs(self.target_x - self.x) > ZOOM_SPEED:
-                self.x += ZOOM_SPEED * self.facing
-            else:
-                self.x = self.target_x
+            self.x = self._step_axis(self.x, self.target_x, ZOOM_SPEED)
+            self.y = self._step_axis(self.y, self.target_y, VCHASE_SPEED)
+            self.ground_y = self.y
+            if self.x == self.target_x and self.y == self.target_y:
                 self.show_msg("Wusss!", 2)
                 self.set_state("happy")
+
+        elif self.state == "spin":
+            # kejar ekor sendiri: badan berputar dengan membalik arah cepat
+            if self.frame_i % 2 == 0:
+                self.facing *= -1
+
+        elif self.state == "pounce":
+            # menyelinap lalu menerkam ke titik kursor yang diincar (usil)
+            left, _, right, _ = app_desktop_bounds(self.app)
+            top, bottom = self._roam_bounds()
+            tx = max(left, min(right - CANVAS_W, self.gaze_x - CANVAS_W // 2))
+            ty = max(top, min(bottom, self.gaze_y - CANVAS_H // 2))
+            self.facing = 1 if tx > self.x else -1
+            self.x = self._step_axis(self.x, tx, POUNCE_SPEED)
+            self.y = self._step_axis(self.y, ty, VCHASE_SPEED)
+            self.ground_y = self.y
+            if self.x == tx and self.y == ty:
+                self.show_msg(random.choice(POUNCE_MESSAGES), 3)
+                bark(self.app.root, self.app.sound_style)
+                self.set_state("jump")
 
         elif self.state == "jump":
             i = len(JUMP_ARC) - self.state_timer
@@ -1219,7 +1547,9 @@ class DogiPet:
             self.y = self.ground_y - JUMP_ARC[i]
 
         # batas layar & kedipan
-        self.x = max(0, min(self.app.screen_w - CANVAS_W, self.x))
+        left, top, right, bottom = app_desktop_bounds(self.app)
+        self.x = max(left, min(right - CANVAS_W, self.x))
+        self.y = max(top, min(bottom - CANVAS_H, self.y))
         self._record_motion_facing(previous_x)
         self.blink = (
             self.state in (
@@ -1242,21 +1572,35 @@ class DogiPet:
                 self.set_state("happy", 8)
             elif self.state == "eat":
                 self.set_state("happy")
+            elif self.state == "spin":
+                # pusing setelah muter-muter, atau senang saja
+                self.set_state("dizzy" if random.random() < 0.35 else "happy",
+                               8)
+            elif self.state == "pounce":
+                # gagal menangkap sampai batas waktu -> nyengir puas saja
+                self.set_state("happy", 8)
             elif self.state in (
                 "sleep", "happy", "dig", "type",
                 "scroll_up", "scroll_down", "meeting_alert", "meeting_watch",
-                "dizzy", "curious", "tail_wag", "beg",
+                "dizzy", "curious", "tail_wag", "beg", "glance", "sniff",
+                "pee",
             ):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch"):
                 nxt = random.choices(
                     [
                         "idle", "walk", "sleep", "dig", "curious",
-                        "tail_wag", "beg", "zoomies",
+                        "tail_wag", "beg", "zoomies", "spin", "sniff", "pee",
                     ],
                     weights=self.app.state_weights(),
                 )[0]
                 self.set_state(nxt)
+                if nxt == "spin" and random.random() < 0.5:
+                    self.show_msg(random.choice(SPIN_MESSAGES), 3)
+                elif nxt == "sniff" and random.random() < 0.5:
+                    self.show_msg(random.choice(SNIFF_MESSAGES), 3)
+                elif nxt == "pee" and random.random() < 0.6:
+                    self.show_msg(random.choice(PEE_MESSAGES), 3)
 
         self.frame_i += 1
 
@@ -1274,8 +1618,9 @@ class DogiPet:
         if abs(dx) + abs(dy) > 4 and not self._moved:
             self._moved = True
             self.set_state("hold")
-        self.x = max(0, min(self.app.screen_w - CANVAS_W, ox + dx))
-        self.y = max(0, min(self.app.screen_h - CANVAS_H, oy + dy))
+        left, top, right, bottom = app_desktop_bounds(self.app)
+        self.x = max(left, min(right - CANVAS_W, ox + dx))
+        self.y = max(top, min(bottom - CANVAS_H, oy + dy))
         self.place()
 
     def _on_release(self, e):
@@ -1456,9 +1801,10 @@ class ControlCenter:
         self.win.update_idletasks()
         natural_width = self.win.winfo_reqwidth()
         natural_height = self.win.winfo_reqheight()
-        x = max(20, (self.app.screen_w - natural_width) // 2)
-        y = max(20, (self.app.screen_h - natural_height) // 2)
-        self.win.geometry(f"+{x}+{y}")
+        left, top, right, bottom = app_desktop_bounds(self.app)
+        x = max(left + 20, left + (right - left - natural_width) // 2)
+        y = max(top + 20, top + (bottom - top - natural_height) // 2)
+        self.win.geometry(window_geometry(natural_width, natural_height, x, y))
         self.sync_from_app()
         self.win.withdraw()
         self.win.after(500, self._refresh_loop)
@@ -1575,7 +1921,7 @@ class ControlCenter:
             justify="left",
         ).pack(side="bottom", anchor="w", padx=10, pady=8)
 
-        self.content = tk.Frame(body, bg=self.BG, width=680, height=620)
+        self.content = tk.Frame(body, bg=self.BG, width=680, height=690)
         self.content.pack(side="left", fill="both", expand=True, padx=18, pady=18)
         self.content.pack_propagate(False)
 
@@ -1915,7 +2261,7 @@ class ControlCenter:
         self.scroll_reaction_button.pack(side="right")
 
         meeting_card = self._card(page)
-        meeting_card.pack(fill="both", expand=True)
+        meeting_card.pack(fill="x", pady=(0, 12))
         self._label(meeting_card, "REAKSI VIDEO MEETING", 8, self.MUTED, bold=True).pack(
             anchor="w", padx=18, pady=(16, 4)
         )
@@ -1970,6 +2316,48 @@ class ControlCenter:
             self.MUTED,
             justify="left",
         ).pack(anchor="w", padx=18, pady=(18, 16))
+
+        system_card = self._card(page)
+        system_card.pack(fill="x")
+        self._label(system_card, "SISTEM", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=18, pady=(16, 8)
+        )
+
+        startup_row = tk.Frame(system_card, bg=self.PANEL)
+        startup_row.pack(fill="x", padx=18, pady=6)
+        startup_copy = tk.Frame(startup_row, bg=self.PANEL)
+        startup_copy.pack(side="left", fill="x", expand=True)
+        self._label(startup_copy, "JALAN SAAT WINDOWS NYALA", 10, bold=True).pack(
+            anchor="w"
+        )
+        self._label(
+            startup_copy,
+            "Dogi otomatis muncul setiap kali kamu login.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w")
+        self.startup_button = self._button(
+            startup_row, "", self.app.toggle_startup, width=12,
+        )
+        self.startup_button.pack(side="right")
+
+        presentation_row = tk.Frame(system_card, bg=self.PANEL)
+        presentation_row.pack(fill="x", padx=18, pady=(6, 16))
+        presentation_copy = tk.Frame(presentation_row, bg=self.PANEL)
+        presentation_copy.pack(side="left", fill="x", expand=True)
+        self._label(
+            presentation_copy, "MODE PRESENTASI (JANGAN GANGGU)", 10, bold=True
+        ).pack(anchor="w")
+        self._label(
+            presentation_copy,
+            "Sembunyi otomatis saat ada aplikasi fullscreen / berbagi layar.",
+            8,
+            self.MUTED,
+        ).pack(anchor="w")
+        self.presentation_button = self._button(
+            presentation_row, "", self.app.toggle_presentation_hide, width=12,
+        )
+        self.presentation_button.pack(side="right")
 
     def _build_updates_page(self):
         page = self._new_page(
@@ -2232,6 +2620,19 @@ class ControlCenter:
             bg=self.ACCENT if meeting_bark_enabled else self.PANEL_ALT,
             fg=self.DARK if meeting_bark_enabled else self.TEXT,
         )
+        startup_supported = startup_registry.is_supported()
+        self.startup_button.configure(
+            text=("ON" if self.app.startup_on else "OFF")
+            if startup_supported else "N/A",
+            state="normal" if startup_supported else "disabled",
+            bg=self.ACCENT if self.app.startup_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.startup_on else self.TEXT,
+        )
+        self.presentation_button.configure(
+            text="ON" if self.app.presentation_hide_on else "OFF",
+            bg=self.ACCENT if self.app.presentation_hide_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.presentation_hide_on else self.TEXT,
+        )
         if self.app.meeting_active:
             meeting_status = f"MEETING TERDETEKSI  /  {self.app.meeting_title.upper()}"
         else:
@@ -2332,8 +2733,14 @@ class DogiApp:
                 pass
             probe.destroy()
 
-        self.screen_w = self.root.winfo_screenwidth()
-        self.screen_h = self.root.winfo_screenheight()
+        (
+            self.screen_left,
+            self.screen_top,
+            self.screen_right,
+            self.screen_bottom,
+        ) = virtual_desktop_bounds(self.root)
+        self.screen_w = self.screen_right - self.screen_left
+        self.screen_h = self.screen_bottom - self.screen_top
 
         # fitur bersama
         self.pomo_end = None
@@ -2342,12 +2749,18 @@ class DogiApp:
         self.agent_thinking = False
         self._status_mtime = 0
         self._last_done_ts = 0
-        # status lama tidak dirayakan ulang setiap aplikasi dibuka
+        self._thinking_since = 0.0
+        # status lama tidak dirayakan ulang setiap aplikasi dibuka; status
+        # "thinking" yang sudah basi (mis. sesi lama/crash) juga diabaikan agar
+        # Dogi tidak langsung membeku saat aplikasi baru dibuka.
         try:
             stale = json.loads(STATUS_FILE.read_text())
             self._status_mtime = STATUS_FILE.stat().st_mtime
             self._last_done_ts = float(stale.get("ts") or 0)
-            self.agent_thinking = stale.get("status") == "thinking"
+            fresh = (time.time() - self._last_done_ts) < THINK_STARTUP_FRESH_S
+            self.agent_thinking = stale.get("status") == "thinking" and fresh
+            if self.agent_thinking:
+                self._thinking_since = self._last_done_ts
         except Exception:
             pass
         self.last_key_time = 0
@@ -2370,6 +2783,9 @@ class DogiApp:
         self._stats_saved = time.time()
         self._nag_cd = 0.0
         self._clock_cd = 0.0
+        self._mischief_at = time.time() + random.uniform(
+            MISCHIEF_MIN_GAP, MISCHIEF_MAX_GAP
+        )
         self.last_greet_date = ""
         self.last_lunch_date = ""
 
@@ -2383,6 +2799,10 @@ class DogiApp:
         self.scroll_reaction_on = True
         self.meeting_reaction_on = True
         self.meeting_bark_on = True
+        self.presentation_hide_on = True
+        self._presentation_checked = 0.0
+        self._hidden_for_presentation = False
+        self.startup_on = startup_registry.is_enabled()
         self.meeting_active = False
         self.meeting_title = ""
         self._meeting_key = None
@@ -2404,7 +2824,7 @@ class DogiApp:
 
         self.pets = [
             DogiPet(
-                self, (self.screen_w - CANVAS_W) // 2,
+                self, self.screen_left + (self.screen_w - CANVAS_W) // 2,
                 self.theme, primary=True,
             )
         ]
@@ -2439,6 +2859,7 @@ class DogiApp:
             self.scroll_reaction_on = bool(cfg.get("scroll_reaction", True))
             self.meeting_reaction_on = bool(cfg.get("meeting_reaction", True))
             self.meeting_bark_on = bool(cfg.get("meeting_bark", True))
+            self.presentation_hide_on = bool(cfg.get("presentation_hide", True))
             raw_stats = cfg.get("stats") or {}
             for key in self.stats:
                 if isinstance(raw_stats.get(key), (int, float)):
@@ -2471,6 +2892,7 @@ class DogiApp:
                         "scroll_reaction": self.scroll_reaction_on,
                         "meeting_reaction": self.meeting_reaction_on,
                         "meeting_bark": self.meeting_bark_on,
+                        "presentation_hide": self.presentation_hide_on,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
                         "stats_ts": time.time(),
                         "last_greet_date": self.last_greet_date,
@@ -2498,8 +2920,10 @@ class DogiApp:
         direction, triggered = self.cursor_swing.update(cursor_x, now)
         if direction:
             for pet in self.pets:
-                if pet.state in ("idle", "walk", "happy", "curious", "beg"):
-                    pet.facing = direction
+                # Gerak biasa hanya menggeser pandangan; badan tidak lagi
+                # membolak-balik setiap kursor berubah arah.
+                pet.gaze_x = cursor_x
+                pet.gaze_until = now + 1.5
         if not triggered:
             return False
         for pet in self.pets:
@@ -2526,11 +2950,19 @@ class DogiApp:
         status = data.get("status")
         ts = data.get("ts", 0)
         if status == "thinking":
+            if not self.agent_thinking:
+                self._thinking_since = time.time()
             self.agent_thinking = True
         elif status == "done" and ts > self._last_done_ts:
             self._last_done_ts = ts
             self.agent_thinking = False
             self.celebrate_all("Guk guk! Tugas selesai!")
+
+    def _agent_watchdog(self, now):
+        """Lepaskan Dogi bila status 'thinking' nyangkut (sesi agent crash /
+        hook 'done' tak pernah tiba), supaya tak membeku selamanya."""
+        if self.agent_thinking and now - self._thinking_since > THINK_WATCHDOG_S:
+            self.agent_thinking = False
 
     # ------------------------------------------------------- kebutuhan & jam
     def on_fed(self):
@@ -2544,17 +2976,21 @@ class DogiApp:
         """Bobot perilaku spontan sesuai jam, energi, dan suasana hati."""
         idle, walk, sleep, dig = 4, 4, 1, 1
         curious, tail_wag, beg, zoomies = 2, 2, 1, 1
+        spin, sniff, pee = 1, 2, 1
         if is_night(time.localtime().tm_hour):
             idle, walk, sleep, dig = 2, 1, 6, 0
             curious, tail_wag, beg, zoomies = 1, 1, 0, 0
+            spin, sniff, pee = 0, 1, 0
         if self.stats["energi"] < NEED_LOW:
             sleep += 4
             walk = max(1, walk - 2)
             zoomies = 0
+            spin = 0
         if self.stats["senang"] < NEED_LOW:
             walk = max(1, walk - 1)  # lesu, malas jalan-jalan
             beg += 3
-        return [idle, walk, sleep, dig, curious, tail_wag, beg, zoomies]
+        return [idle, walk, sleep, dig, curious, tail_wag, beg, zoomies,
+                spin, sniff, pee]
 
     def _update_stats(self, now):
         minutes = (now - self._last_stats_tick) / 60
@@ -2566,6 +3002,40 @@ class DogiApp:
         if now - self._stats_saved > 60:
             self._stats_saved = now
             self.save_config()
+
+    def _schedule_mischief(self, now):
+        self._mischief_at = now + random.uniform(
+            MISCHIEF_MIN_GAP, MISCHIEF_MAX_GAP
+        )
+
+    def _check_mischief(self, now):
+        """Sesekali Dogi berulah usil: nyeletuk, muter, atau lari gembira."""
+        if now < self._mischief_at:
+            return
+        self._schedule_mischief(now)
+        if not self.pets:
+            return
+        pet = self.pets[0]
+        # jangan usil saat sedang sibuk kerja, lelah, atau malam hari
+        if pet.state not in ("idle", "walk", "curious", "sniff", "tail_wag"):
+            return
+        if is_night(time.localtime(now).tm_hour):
+            return
+        if HAS_PYNPUT and now - self.last_key_time < 3.0:
+            return
+        if self.stats["energi"] < NEED_LOW:
+            return
+        roll = random.random()
+        if roll < 0.4:
+            pet.show_msg(random.choice(MISCHIEF_MESSAGES), 5)
+            pet.set_state("beg")
+        elif roll < 0.7:
+            pet.set_state("spin")
+            pet.show_msg(random.choice(SPIN_MESSAGES), 3)
+        else:
+            pet.set_state("zoomies")
+            pet.show_msg(random.choice(MISCHIEF_MESSAGES), 3)
+        self.stats["senang"] = clamp_stat(self.stats["senang"] + 3)
 
     def _check_needs(self, now):
         """Dogi merengek lewat bubble saat ada kebutuhan yang rendah."""
@@ -2774,6 +3244,51 @@ class DogiApp:
         if self.control_center:
             self.control_center.sync_from_app()
 
+    def toggle_presentation_hide(self):
+        self.presentation_hide_on = not self.presentation_hide_on
+        self._presentation_checked = 0.0
+        self.save_config()
+        if self.pets:
+            status = "aktif" if self.presentation_hide_on else "nonaktif"
+            self.pets[0].show_msg(f"Mode presentasi {status}", 3)
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def toggle_startup(self):
+        try:
+            startup_registry.set_enabled(not self.startup_on)
+        except startup_registry.StartupError as exc:
+            messagebox.showwarning("DogiPet", str(exc))
+            return
+        self.startup_on = startup_registry.is_enabled()
+        if self.pets:
+            status = "aktif" if self.startup_on else "nonaktif"
+            self.pets[0].show_msg(f"Jalan saat startup {status}", 3)
+        if self.control_center:
+            self.control_center.sync_from_app()
+
+    def _apply_presentation(self, now):
+        """Sembunyikan Dogi saat aplikasi fullscreen di depan (presentasi)."""
+        want_hidden = False
+        if self.presentation_hide_on:
+            if now - self._presentation_checked < 1.0:
+                return
+            self._presentation_checked = now
+            want_hidden = foreground_fullscreen_active()
+        if want_hidden == self._hidden_for_presentation:
+            return
+        self._hidden_for_presentation = want_hidden
+        for pet in self.pets:
+            try:
+                pet.win.withdraw() if want_hidden else pet.win.deiconify()
+            except tk.TclError:
+                pass
+        for bone in self.bones:
+            try:
+                bone.win.withdraw() if want_hidden else bone.win.deiconify()
+            except tk.TclError:
+                pass
+
     def toggle_auto_update(self):
         self.auto_update = not self.auto_update
         self.save_config()
@@ -2857,7 +3372,10 @@ class DogiApp:
         used = {p.theme for p in self.pets}
         pool = [t for t in COLOR_THEMES if t not in used] \
             or list(COLOR_THEMES)
-        x = random.randint(40, max(41, self.screen_w - CANVAS_W - 40))
+        x = random.randint(
+            self.screen_left + 40,
+            max(self.screen_left + 41, self.screen_right - CANVAS_W - 40),
+        )
         self.pets.append(DogiPet(self, x, random.choice(pool)))
         if self.control_center:
             self.control_center.sync_from_app()
@@ -2876,7 +3394,10 @@ class DogiApp:
     def spawn_bone(self):
         if len(self.bones) >= 3 or not self.pets:
             return
-        x = random.randint(40, max(41, self.screen_w - BONE_W - 40))
+        x = random.randint(
+            self.screen_left + 40,
+            max(self.screen_left + 41, self.screen_right - BONE_W - 40),
+        )
         # pilih Dogi terdekat yang sedang senggang
         free = [p for p in self.pets if p.state in (
             "idle", "walk", "sleep", "dig", "curious", "tail_wag", "beg",
@@ -2923,11 +3444,14 @@ class DogiApp:
         self._check_cursor_swing(now, cx)
 
         self._poll_agent_status()
+        self._agent_watchdog(now)
         self._poll_update_events()
         self._update_stats(now)
         self._check_clock(now)
         self._check_needs(now)
+        self._check_mischief(now)
         self._check_meeting(now)
+        self._apply_presentation(now)
 
         if self.pomo_end and now >= self.pomo_end:
             self.pomo_end = None
@@ -2981,6 +3505,8 @@ if __name__ == "__main__":
         dogi_hook.write_status(status)
         raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
+    if not acquire_single_instance(smoke_test=is_smoke_test):
+        raise SystemExit(0)
     application = DogiApp(
         smoke_test=is_smoke_test,
         opaque_preview="--opaque-preview" in sys.argv,

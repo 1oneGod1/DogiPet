@@ -69,6 +69,14 @@ class ContextFrameTests(unittest.TestCase):
 
 
 class CursorSwingTests(unittest.TestCase):
+    def test_default_detector_needs_deliberate_long_swings(self):
+        detector = dogi.CursorSwingDetector()
+        short_swings = (100, 180, 100, 180, 100, 180, 100, 180)
+        self.assertFalse(any(
+            detector.update(x, index * 0.25)[1]
+            for index, x in enumerate(short_swings)
+        ))
+
     def test_repeated_horizontal_reversals_trigger_dizzy_once(self):
         detector = dogi.CursorSwingDetector(
             min_run=50, window=3.0, reversals=4, cooldown=8.0

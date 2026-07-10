@@ -10,13 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReferenceSpriteTests(unittest.TestCase):
-    def test_left_native_running_art_is_mirrored_toward_motion(self):
-        for state in ("walk", "chase", "fetch"):
+    def test_right_facing_art_mirrors_only_toward_left_motion(self):
+        # Semua sprite digambar menghadap kanan: gerak kanan memakai art asli,
+        # gerak kiri dicerminkan. Regresi "jalan kebalik" terjadi saat walk/
+        # chase/fetch keliru ditandai sebagai art menghadap kiri.
+        for state in ("walk", "chase", "fetch", "idle", "sleep",
+                      "meeting_watch"):
             with self.subTest(state=state):
-                self.assertTrue(dogi.sprite_is_mirrored(state, 1))
-                self.assertFalse(dogi.sprite_is_mirrored(state, -1))
-        self.assertFalse(dogi.sprite_is_mirrored("idle", 1))
-        self.assertTrue(dogi.sprite_is_mirrored("idle", -1))
+                self.assertFalse(dogi.sprite_is_mirrored(state, 1))
+                self.assertTrue(dogi.sprite_is_mirrored(state, -1))
 
     def test_confused_animation_uses_slow_ping_pong_sequence(self):
         frames = [dogi.sprite_frame_index("think", tick) for tick in range(12)]
@@ -46,7 +48,7 @@ class ReferenceSpriteTests(unittest.TestCase):
 
     def test_extra_behaviors_map_to_existing_animation_assets(self):
         self.assertEqual(dogi.sprite_asset_state("curious"), "think")
-        self.assertEqual(dogi.sprite_asset_state("tail_wag"), "dig")
+        self.assertEqual(dogi.sprite_asset_state("tail_wag"), "tail_wag")
         self.assertEqual(dogi.sprite_asset_state("beg"), "happy")
         self.assertEqual(dogi.sprite_asset_state("zoomies"), "chase")
 
@@ -84,6 +86,16 @@ class ReferenceSpriteTests(unittest.TestCase):
                     colors = set(block.get_flattened_data())
                     with self.subTest(sprite=path.name, x=x, y=y):
                         self.assertEqual(len(colors), 1)
+
+    def test_pointed_tail_has_a_real_wag_cycle(self):
+        root = ROOT / "assets" / "sprites" / "shiba"
+        frames = [Image.open(root / f"tail_wag_{index}.png").tobytes()
+                  for index in range(4)]
+        self.assertGreaterEqual(len(set(frames)), 3)
+        self.assertNotEqual(
+            Image.open(root / "tail_wag_0.png").tobytes(),
+            Image.open(root / "tail_wag_1.png").tobytes(),
+        )
 
 
 if __name__ == "__main__":

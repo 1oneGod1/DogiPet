@@ -5,10 +5,10 @@ tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
 istirahat, dan merayakan saat AI agent selesai bekerja.
 
 Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
-kode, suara, dan identitas Dogi sendiri. Mulai v0.5.4, semua gerakan memakai
-sprite PNG pixel-art transparan dari lembar karakter referensi yang disetujui.
+kode, suara, dan identitas Dogi sendiri. Mulai v0.5.6, semua gerakan memakai
+sprite pixel-art transparan yang digambar manual pada grid logis 32 x 28.
 
-![Sprite Dogi v0.5.1](qa/reference-sprites-v051-top.png)
+![Sprite Dogi semua state](qa/all-states-preview.png)
 
 ## Aplikasi dan Control Center
 
@@ -24,20 +24,40 @@ sementara desktop pet tetap aktif.
 ## Fitur saat ini
 
 - Animasi pixel-art empat frame yang tajam untuk tiap aksi utama.
-- Mengejar kursor yang bergerak cepat.
-- Menoleh mengikuti kursor; bila kursor digerakkan kanan-kiri berulang dengan
-  cepat, Dogi menjadi pusing lengkap dengan animasi spiral.
+- Berkeliaran mendatar maupun vertikal dan dapat menyeberang ke monitor lain,
+  termasuk monitor yang berada di kiri/atas koordinat monitor utama.
+- Lebih sering hanya menggerakkan pandangan ke arah kursor; mengejar kursor
+  menjadi reaksi langka dengan jeda agar Dogi tidak selalu menghampiri.
+- Gesture pusing sengaja sulit terpicu: kursor harus diayun jauh dan cepat
+  kanan-kiri sedikitnya tujuh kali, lalu ada cooldown 30 detik.
 - Animasi bingung memakai transisi ping-pong yang lebih halus dan lambat.
 - Arah sprite lari mengikuti perubahan posisi aktual, bukan sekadar target;
   animasi mengetik juga memakai ping-pong tanpa kedipan idle saat timer habis.
 - Tingkah spontan tambahan: zoomies menyeberangi layar, penasaran/head-tilt,
   goyang ekor, dan minta perhatian. Semua bisa dipicu dari menu klik kanan.
+- Keusilan: sesekali Dogi berulah usil sendiri — nyeletuk jahil, muter-muter
+  mengejar ekornya (kejar ekor), atau lari gembira mengajak main. Frekuensinya
+  dijaga (ada jeda, tidak saat kamu sibuk mengetik, lelah, atau malam hari).
+- Menerkam kursor: kadang, alih-alih hanya melirik, Dogi menyelinap lalu
+  menerkam kursor dengan lompatan dan celetukan usil.
+- Mengendus-endus (sniff) tanah sebagai selingan tingkah santai.
+- Sesekali pipis (jongkok, genangan kuning membesar) dengan celetukan
+  "Pipis dulu ya~" — hanya siang hari.
+- Saat AI agent bekerja Dogi fokus (pose berpikir), tetapi lempar tulang tetap
+  bisa menembusnya, dan status "thinking" yang nyangkut otomatis dilepas
+  setelah beberapa menit sehingga Dogi tak pernah membeku selamanya.
+- Ekor runcing gaya shiba berkibas antar-frame pada semua aktivitas; pose tidur
+  memakai ekor rebah memanjang dan tidak memakai bentuk gelung/donat.
 - Laptop mengetik digambar ulang pada grid logis agar layar dan keyboard base
   selalu utuh di seluruh delapan frame.
 - Ikut mengetik di laptop mini saat kamu mengetik.
 - Ikut menggerakkan indikator laptop saat kamu scroll ke atas atau bawah.
 - Mengenali jendela Zoom, Teams, Google Meet, Webex, dan call lain; Dogi
   menghadap ke posisi meeting, menggonggong sekali, lalu sesekali mengawasi.
+- Mode presentasi (jangan ganggu): Dogi otomatis sembunyi saat ada aplikasi
+  fullscreen atau berbagi layar, lalu muncul lagi setelahnya.
+- Opsi jalan otomatis saat Windows login (registry HKCU Run), bisa
+  diaktifkan/nonaktifkan dari halaman Reactions → SISTEM.
 - Mengajak istirahat bila kamu terdeteksi aktif nonstop terlalu lama
   (ambang 45/60/90 menit bisa diatur di halaman Fokus).
 - Klik untuk mengelus; saat di-drag Dogi berubah ke pose digendong dengan kaki
@@ -152,12 +172,17 @@ python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py
 
 Repository: <https://github.com/1oneGod1/DogiPet>
 
-### Mengimpor ulang lembar sprite
+### Menggambar ulang sprite
 
-Lembar sprite chunky disimpan di
-`assets/reference/dogi-chunky-sprite-sheet-v051.png`. Untuk mengekstrak ulang
-seluruh animasi transparan dan enam variasi tema:
+Sprite Dogi sekarang bersumber dari generator grid manual
+`scripts/draw_sprites.py`. Jalankan ini setelah mengubah template pose,
+ekspresi, laptop, atau behavior visual:
 
 ```powershell
-python scripts/import_reference_sprites.py assets/reference/dogi-chunky-sprite-sheet-v051.png
+python scripts/draw_sprites.py
+python scripts/generate_assets.py
 ```
+
+Generator akan menulis ulang seluruh PNG di `assets/sprites/`, membuat preview
+QA di `qa/handmade-sprites.png` dan `qa/all-states-preview.png`, lalu
+`generate_assets.py` memperbarui icon serta metadata versi.

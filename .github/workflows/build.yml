@@ -21,9 +21,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
+      - run: python scripts/draw_sprites.py
+      - run: python scripts/generate_assets.py
       - run: python -m unittest discover -s tests -v
       - run: python -m py_compile dogi.py updater.py dogi_hook.py
-      - run: python scripts/generate_assets.py
       - run: python -m PyInstaller --noconfirm --clean DogiPet.spec
       - run: dist\DogiPet.exe --smoke-test
       - uses: actions/upload-artifact@v4

@@ -34,6 +34,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
+          python scripts/draw_sprites.py
           python scripts/generate_assets.py
           python -m PyInstaller --noconfirm --clean DogiPet.spec
           dist\DogiPet.exe --smoke-test

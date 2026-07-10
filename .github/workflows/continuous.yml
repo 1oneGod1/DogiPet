@@ -39,6 +39,7 @@ jobs:
         shell: pwsh
         run: |
           python scripts/set_build_info.py --build-id "${{ github.sha }}"
+          python scripts/draw_sprites.py
           python scripts/generate_assets.py
           python -m PyInstaller --noconfirm --clean DogiPet.spec
           dist\DogiPet.exe --smoke-test
