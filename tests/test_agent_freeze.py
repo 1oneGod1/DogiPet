@@ -69,6 +69,26 @@ class ThinkOverrideTests(unittest.TestCase):
         pet.tick(100.0, pet.center_x(), pet.y, False, True, scrolling=0)
         self.assertEqual(pet.state, "eat")
 
+    def test_active_fetch_rejects_unrelated_state_interruptions(self):
+        pet = make_pet()
+        bone = SimpleNamespace(x=1200, y=520)
+        pet.state = "fetch"
+        pet.fetch_bone = bone
+
+        for interruption in ("think", "meeting_alert", "happy", "sleep"):
+            pet.set_state(interruption)
+            self.assertEqual(pet.state, "fetch")
+            self.assertIs(pet.fetch_bone, bone)
+
+    def test_fetch_can_enter_eat_after_bone_is_collected(self):
+        pet = make_pet()
+        pet.state = "fetch"
+        pet.fetch_bone = None
+
+        pet.set_state("eat")
+
+        self.assertEqual(pet.state, "eat")
+
 
 class WatchdogTests(unittest.TestCase):
     def make_app(self):

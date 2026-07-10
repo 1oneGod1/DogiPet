@@ -1209,6 +1209,13 @@ class DogiPet:
         return pal
 
     def set_state(self, state, duration=None):
+        # Setelah tulang ditugaskan, Dogi harus menyelesaikan pengambilannya.
+        # Notifikasi global (agent selesai, meeting, sapaan jam, dan perilaku
+        # spontan) dapat memanggil set_state di antara dua tick. Dulu panggilan
+        # itu membatalkan fetch dan meninggalkan tulang sendirian di layar.
+        if self.state == "fetch" and self.fetch_bone is not None \
+                and state not in ("fetch", "hold", "eat"):
+            return
         if self.state == "fetch" and state not in ("fetch", "hold"):
             self.fetch_bone = None
         self.state = state
@@ -3394,17 +3401,22 @@ class DogiApp:
     def spawn_bone(self):
         if len(self.bones) >= 3 or not self.pets:
             return
+        # pilih Dogi terdekat yang sedang senggang
+        free = [p for p in self.pets if p.state in (
+            "idle", "walk", "sleep", "dig", "think", "curious",
+            "tail_wag", "beg", "glance", "sniff", "pee",
+        )]
+        # Jangan menimpa fetch yang masih aktif. Sebelumnya klik berulang dapat
+        # memindahkan referensi pet ke tulang baru dan membuat tulang lama
+        # tidak pernah diambil.
+        if not free:
+            self.pets[0].show_msg("Sebentar, aku masih sibuk!", 3)
+            return
         x = random.randint(
             self.screen_left + 40,
             max(self.screen_left + 41, self.screen_right - BONE_W - 40),
         )
-        # pilih Dogi terdekat yang sedang senggang
-        free = [p for p in self.pets if p.state in (
-            "idle", "walk", "sleep", "dig", "curious", "tail_wag", "beg",
-        )]
-        pet = min(
-            free or self.pets, key=lambda p: abs(p.center_x() - x)
-        )
+        pet = min(free, key=lambda p: abs(p.center_x() - x))
         y = pet.y + CANVAS_H - BONE_H - 6
         bone = Bone(self, x, y)
         self.bones.append(bone)
