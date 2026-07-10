@@ -2,10 +2,11 @@
 
 DogiPet adalah anjing piksel yang hidup di desktop Windows. Ia berjalan,
 tidur, mengikuti kursor, bereaksi saat kamu mengetik, mengingatkan waktu
-istirahat, dan merayakan saat AI agent selesai bekerja.
+istirahat, menyimpan catatan, mengingatkan agenda Google Calendar, dan
+merayakan saat AI agent selesai bekerja.
 
 Proyek ini terinspirasi oleh konsep desktop pet, dengan karakter, sprite,
-kode, suara, dan identitas Dogi sendiri. Mulai v0.5.6, semua gerakan memakai
+kode, suara, dan identitas Dogi sendiri. Mulai v0.6.0, semua gerakan memakai
 sprite pixel-art transparan yang digambar manual pada grid logis 32 x 28.
 
 ![Sprite Dogi semua state](qa/all-states-preview.png)
@@ -70,6 +71,15 @@ sementara desktop pet tetap aktif.
 - Enam tema warna bulu dan empat gaya suara gonggongan (Klasik, Kecil,
   Besar, Senyap) dengan pratinjau di halaman Tampilan.
 - Timer Pomodoro dan pengingat peregangan.
+- Halaman **Catatan & Agenda** dengan banyak catatan lokal, autosave ketika
+  berpindah catatan, serta tombol **Rapikan AI** yang mengubah catatan acak
+  menjadi Markdown terstruktur tanpa menambah fakta baru.
+- OpenAI Responses API bersifat opsional dan hanya dipanggil ketika tombol
+  Rapikan AI ditekan. Model default `gpt-5.6-luna`; API key dienkripsi memakai
+  Windows DPAPI dan tidak ditulis ke repository atau `config.json`.
+- Google Calendar read-only melalui OAuth desktop + PKCE. Agenda tujuh hari
+  ditampilkan di Control Center, disinkronkan berkala, dan Dogi mengingatkan
+  sekali saat agenda tinggal 10 menit.
 - Reaksi status AI agent, dengan pemasangan hook Claude Code sekali klik
   dari Control Center (halaman Agent AI).
 - Control Center native untuk preview, aksi cepat, personalisasi, fokus, dan
@@ -89,6 +99,38 @@ python dogi.py
 ```
 
 Klik kanan Dogi untuk membuka menu fitur dan pengaturan.
+
+## Catatan dan Rapikan AI
+
+1. Buka **Control Center → Catatan & Agenda**.
+2. Buat atau pilih catatan, lalu tekan **Simpan**.
+3. Tekan **Atur AI** dan masukkan OpenAI API key milikmu.
+4. Tekan **Rapikan AI**. Hanya isi catatan yang sedang terbuka yang dikirim ke
+   OpenAI; hasil langsung dikembalikan ke editor dan disimpan lokal.
+
+API key disimpan di `~/.dogi/credentials.bin` sebagai blob terenkripsi Windows
+DPAPI. Catatan biasa tetap berada di `~/.dogi/notes.json`, sehingga masih dapat
+dipakai tanpa akun AI atau internet. Implementasi memakai
+[OpenAI Responses API](https://developers.openai.com/api/docs/guides/text)
+dan menonaktifkan penyimpanan respons (`store: false`).
+
+## Menghubungkan Google Calendar
+
+Integrasi hanya meminta scope `calendar.readonly`; DogiPet tidak dapat membuat,
+mengubah, atau menghapus agenda.
+
+1. Buat atau pilih proyek di Google Cloud lalu aktifkan **Google Calendar API**.
+2. Atur OAuth consent screen.
+3. Buat OAuth Client dengan tipe **Desktop app** dan unduh file JSON.
+4. Buka **Control Center → Catatan & Agenda → Hubungkan** lalu pilih JSON tadi.
+5. Browser akan terbuka. Pilih akun Google dan izinkan akses baca kalender.
+
+Panduan resminya tersedia di [Google Calendar Python quickstart](https://developers.google.com/workspace/calendar/api/quickstart/python)
+dan [OAuth untuk aplikasi desktop](https://developers.google.com/identity/protocols/oauth2/native-app).
+Token akses/refresh serta konfigurasi client disimpan terenkripsi dalam
+`~/.dogi/credentials.bin`. Tekan **Putuskan** untuk menghapus token akun dari
+komputer. Agenda disinkronkan setiap lima menit dan dapat dibuka lewat klik
+ganda pada daftar.
 
 ## Build aplikasi Windows
 
@@ -157,9 +199,10 @@ pernah dibaca.
 
 ## Data lokal
 
-Konfigurasi, suara sintetis, status agent, dan installer sementara tersimpan di
-`~/.dogi/`. File `config.json` menyimpan tema, pengingat peregangan, serta
-preferensi pembaruan.
+Konfigurasi, suara sintetis, status agent, catatan, dan installer sementara
+tersimpan di `~/.dogi/`. File `config.json` menyimpan preferensi non-rahasia,
+`notes.json` menyimpan isi catatan, dan `credentials.bin` menyimpan API key serta
+token OAuth yang telah dienkripsi Windows DPAPI.
 
 ## Pengembangan
 
@@ -167,7 +210,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py calendar_integration.py secure_store.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>

@@ -1,4 +1,4 @@
-# Design QA — DogiPet 0.5.6
+# Design QA — DogiPet 0.6.0
 
 **Source visual truth**
 
@@ -29,7 +29,7 @@
 
 - Windows 11, display scaling 125%.
 - Pet viewport 230 × 176 logical px; state `idle`.
-- Full sheet: 18 state; 17 state memakai 4 frame dan mengetik memakai 8 frame.
+- Full sheet: 19 state; 18 state memakai 4 frame dan mengetik memakai 8 frame.
 
 **Full-view comparison evidence**
 
@@ -93,11 +93,11 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 61 unit test lulus, termasuk detektor gesture, false-positive jitter,
+- 101 unit test lulus, termasuk detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 912 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan
   uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.6`.
+- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.6.0`.
 
 final result: passed

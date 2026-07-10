@@ -13,6 +13,8 @@ Fitur lengkap:
     - SUARA GONGGONGAN asli (file WAV disintesis otomatis saat pertama
       dijalankan — tanpa file eksternal, tanpa library tambahan)
     - Pomodoro 25 menit + pengingat peregangan tiap 45 menit
+    - Catatan lokal dengan tombol Rapikan AI yang bersifat opt-in
+    - Google Calendar read-only dengan pengingat agenda melalui Dogi
     - Integrasi CLAUDE CODE: muka mikir "..." saat agent bekerja,
       semua Dogi lompat + menggonggong saat tugas selesai
       (setup: lihat dogi_hook.py & README)
@@ -27,7 +29,8 @@ Tested: Windows 10/11. pynput opsional.
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox, simpledialog
+from datetime import datetime
 import os
 import random
 import sys
@@ -41,7 +44,14 @@ import pathlib
 import webbrowser
 
 import agent_hooks
+from calendar_integration import (
+    CalendarIntegrationError,
+    GoogleCalendarIntegration,
+    reminder_due,
+)
 import dogi_hook
+from notes_ai import DEFAULT_AI_MODEL, NotesStore, organize_note
+from secure_store import SecureStore, SecureStoreError
 import startup as startup_registry
 from build_info import BUILD_ID
 from updater import RELEASE_PAGE, UpdateInfo, UpdateManager, launch_installer
@@ -129,6 +139,11 @@ FRIEND_COOLDOWN = 25       # detik jeda antar sapaan
 CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
+NOTES_FILE = CONF_DIR / "notes.json"
+CREDENTIALS_FILE = CONF_DIR / "credentials.bin"
+CALENDAR_SYNC_SECONDS = 300
+CALENDAR_RETRY_SECONDS = 60
+DEFAULT_CALENDAR_REMINDER_MIN = 10
 _SINGLE_INSTANCE_MUTEX = None
 _SINGLE_INSTANCE_LOCK = None
 _SINGLE_INSTANCE_PID_FILE = CONF_DIR / "dogipet.pid"
@@ -1791,6 +1806,11 @@ class ControlCenter:
         self.status_var = tk.StringVar(value="DOGI AKTIF DI DESKTOP")
         self.pomodoro_var = tk.StringVar(value="SIAP UNTUK SESI FOKUS")
         self.theme_var = tk.StringVar(value=app.theme)
+        self.note_status_var = tk.StringVar(value="CATATAN TERSIMPAN LOKAL")
+        self._current_note_id = None
+        self._note_ids = []
+        self._loading_note = False
+        self._calendar_rendered_ids = ()
         self._hook_state = (0.0, False)  # (kapan dicek, terpasang?)
 
         self.pages = {}
@@ -1800,6 +1820,7 @@ class ControlCenter:
         self._build_home_page()
         self._build_customize_page()
         self._build_focus_page()
+        self._build_notes_page()
         self._build_reactions_page()
         self._build_agent_page()
         self._build_updates_page()
@@ -1905,6 +1926,7 @@ class ControlCenter:
             ("HOME", "BERANDA"),
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
+            ("NOTES", "CATATAN & AGENDA"),
             ("REACTIONS", "REAKSI"),
             ("AGENT", "AGENT AI"),
             ("UPDATES", "PEMBARUAN"),
@@ -2183,6 +2205,136 @@ class ControlCenter:
             button.pack(side="right", padx=3)
             self.rest_limit_buttons[minutes] = button
 
+    def _build_notes_page(self):
+        page = self._new_page(
+            "NOTES",
+            "CATATAN RAPI. AGENDA TERJAGA.",
+            "Simpan lokal, rapikan saat diminta, dan biarkan Dogi mengingatkanmu.",
+        )
+
+        editor_card = self._card(page, height=390)
+        editor_card.pack(fill="x", pady=(0, 10))
+        editor_card.pack_propagate(False)
+        editor_body = tk.Frame(editor_card, bg=self.PANEL)
+        editor_body.pack(fill="both", expand=True, padx=14, pady=14)
+
+        note_sidebar = tk.Frame(editor_body, bg=self.PANEL, width=165)
+        note_sidebar.pack(side="left", fill="y", padx=(0, 12))
+        note_sidebar.pack_propagate(False)
+        self._label(note_sidebar, "DAFTAR CATATAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", pady=(0, 6)
+        )
+        self.note_list = tk.Listbox(
+            note_sidebar,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            selectbackground=self.ACCENT,
+            selectforeground=self.DARK,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=("Consolas", 9),
+            exportselection=False,
+        )
+        self.note_list.pack(fill="both", expand=True)
+        self.note_list.bind("<<ListboxSelect>>", self._on_note_select)
+        self._button(
+            note_sidebar, "+ CATATAN BARU", self._new_note, width=15,
+        ).pack(fill="x", pady=(8, 0))
+
+        note_editor = tk.Frame(editor_body, bg=self.PANEL)
+        note_editor.pack(side="left", fill="both", expand=True)
+        self._label(note_editor, "JUDUL", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.note_title = tk.Entry(
+            note_editor,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            relief="flat",
+            font=("Consolas", 11, "bold"),
+        )
+        self.note_title.pack(fill="x", ipady=6, pady=(4, 8))
+        self.note_body = tk.Text(
+            note_editor,
+            height=12,
+            wrap="word",
+            undo=True,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            selectbackground="#635a2a",
+            relief="flat",
+            padx=10,
+            pady=8,
+            font=("Consolas", 9),
+        )
+        self.note_body.pack(fill="both", expand=True)
+
+        note_actions = tk.Frame(note_editor, bg=self.PANEL)
+        note_actions.pack(fill="x", pady=(8, 0))
+        self._button(
+            note_actions, "SIMPAN", self._save_note, accent=True, width=10,
+        ).pack(side="left", padx=(0, 5))
+        self._button(
+            note_actions, "HAPUS", self._delete_note, width=9,
+        ).pack(side="left", padx=(0, 5))
+        self._button(
+            note_actions, "ATUR AI", self._configure_ai, width=9,
+        ).pack(side="left", padx=(0, 5))
+        self.ai_note_button = self._button(
+            note_actions, "RAPIKAN AI", self._organize_current_note, width=13,
+        )
+        self.ai_note_button.pack(side="right")
+        self._label(
+            note_editor,
+            textvariable=self.note_status_var,
+            size=7,
+            color=self.MUTED,
+        ).pack(anchor="w", pady=(5, 0))
+
+        calendar_card = self._card(page)
+        calendar_card.pack(fill="both", expand=True)
+        calendar_header = tk.Frame(calendar_card, bg=self.PANEL)
+        calendar_header.pack(fill="x", padx=14, pady=(12, 6))
+        self._label(
+            calendar_header, "GOOGLE CALENDAR", 8, self.MUTED, bold=True
+        ).pack(side="left")
+        self.calendar_status_label = self._label(
+            calendar_header, "", 8, self.ACCENT, bold=True
+        )
+        self.calendar_status_label.pack(side="right")
+
+        calendar_body = tk.Frame(calendar_card, bg=self.PANEL)
+        calendar_body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self.calendar_list = tk.Listbox(
+            calendar_body,
+            height=6,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            selectbackground="#635a2a",
+            selectforeground=self.TEXT,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=("Consolas", 8),
+            exportselection=False,
+        )
+        self.calendar_list.pack(side="left", fill="both", expand=True)
+        self.calendar_list.bind("<Double-Button-1>", self._open_calendar_event)
+        calendar_actions = tk.Frame(calendar_body, bg=self.PANEL)
+        calendar_actions.pack(side="left", fill="y", padx=(10, 0))
+        self._button(
+            calendar_actions, "HUBUNGKAN", self._connect_google_calendar, width=12,
+        ).pack(fill="x", pady=(0, 4))
+        self._button(
+            calendar_actions, "SINKRON", self._sync_google_calendar, width=12,
+        ).pack(fill="x", pady=4)
+        self._button(
+            calendar_actions, "PUTUSKAN", self._disconnect_google_calendar, width=12,
+        ).pack(fill="x", pady=4)
+
+        self._refresh_notes(create_if_empty=True)
+
     def _build_agent_page(self):
         page = self._new_page(
             "AGENT",
@@ -2455,14 +2607,14 @@ class ControlCenter:
         self._label(
             card,
             "Anjing piksel yang mengikuti kursor, bereaksi saat kamu mengetik,\n"
-            "menjalankan timer fokus, dan merayakan tugas AI yang selesai.",
+            "merapikan catatan, mengingatkan agenda, dan merayakan tugas AI.",
             10,
             self.TEXT,
             justify="left",
         ).pack(anchor="w", padx=24, pady=(22, 18))
         self._label(
             card,
-            "TANPA PELACAKAN  /  KONFIGURASI LOKAL  /  UPDATE GITHUB",
+            "TANPA PELACAKAN  /  INTEGRASI OPT-IN  /  UPDATE GITHUB",
             8,
             self.MUTED,
             bold=True,
@@ -2532,6 +2684,225 @@ class ControlCenter:
                         fill=color,
                         outline=color,
                     )
+
+    # ----------------------------------------------------- catatan & agenda
+    def _refresh_notes(self, select_id=None, create_if_empty=False):
+        try:
+            notes = self.app.note_store.all()
+            if create_if_empty and not notes:
+                notes = [self.app.note_store.create()]
+        except Exception as exc:
+            messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
+            return
+        self._loading_note = True
+        try:
+            self.note_list.delete(0, "end")
+            self._note_ids = [note.id for note in notes]
+            for note in notes:
+                self.note_list.insert("end", note.title)
+            wanted = select_id or self._current_note_id
+            if wanted not in self._note_ids and self._note_ids:
+                wanted = self._note_ids[0]
+            if wanted in self._note_ids:
+                index = self._note_ids.index(wanted)
+                self.note_list.selection_set(index)
+                self.note_list.see(index)
+                self._load_note(wanted)
+        finally:
+            self._loading_note = False
+
+    def _load_note(self, note_id):
+        note = self.app.note_store.get(note_id)
+        if not note:
+            return
+        self._current_note_id = note.id
+        self.note_title.delete(0, "end")
+        self.note_title.insert(0, note.title)
+        self.note_body.delete("1.0", "end")
+        self.note_body.insert("1.0", note.body)
+        self.note_status_var.set("CATATAN TERSIMPAN LOKAL")
+
+    def _persist_current_note(self):
+        if not self._current_note_id:
+            return None
+        title = self.note_title.get()
+        body = self.note_body.get("1.0", "end-1c")
+        return self.app.note_store.update(self._current_note_id, title, body)
+
+    def _on_note_select(self, _event=None):
+        if self._loading_note:
+            return
+        selection = self.note_list.curselection()
+        if not selection:
+            return
+        note_id = self._note_ids[selection[0]]
+        if note_id == self._current_note_id:
+            return
+        try:
+            self._persist_current_note()
+            self._load_note(note_id)
+        except Exception as exc:
+            messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
+
+    def _new_note(self):
+        try:
+            self._persist_current_note()
+            note = self.app.note_store.create()
+            self._refresh_notes(select_id=note.id)
+            self.note_title.focus_set()
+            self.note_title.selection_range(0, "end")
+        except Exception as exc:
+            messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
+
+    def _save_note(self):
+        try:
+            note = self._persist_current_note()
+            if note:
+                self._refresh_notes(select_id=note.id)
+                self.note_status_var.set("TERSIMPAN  /  HANYA DI KOMPUTER INI")
+                if self.app.pets:
+                    self.app.pets[0].show_msg("Catatan tersimpan!", 3)
+        except Exception as exc:
+            messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
+
+    def _delete_note(self):
+        if not self._current_note_id:
+            return
+        if not messagebox.askyesno(
+            "Hapus catatan", "Hapus catatan ini secara permanen?", parent=self.win
+        ):
+            return
+        try:
+            self.app.note_store.delete(self._current_note_id)
+            self._current_note_id = None
+            self._refresh_notes(create_if_empty=True)
+        except Exception as exc:
+            messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
+
+    def _configure_ai(self):
+        configured = self.app.has_openai_key()
+        prompt = (
+            "Masukkan API key OpenAI baru. Key disimpan terenkripsi dengan "
+            "Windows DPAPI dan hanya dipakai saat tombol Rapikan AI ditekan."
+        )
+        if configured:
+            prompt += "\n\nKosongkan untuk menghapus key yang tersimpan."
+        key = simpledialog.askstring(
+            "Atur AI Catatan", prompt, parent=self.win, show="*"
+        )
+        if key is None:
+            return False
+        try:
+            self.app.set_openai_key(key)
+        except SecureStoreError as exc:
+            messagebox.showerror("Atur AI Catatan", str(exc), parent=self.win)
+            return False
+        if key.strip():
+            self.note_status_var.set(f"AI SIAP  /  {self.app.ai_model}")
+            return True
+        self.note_status_var.set("API KEY AI DIHAPUS")
+        return False
+
+    def _organize_current_note(self):
+        text = self.note_body.get("1.0", "end-1c")
+        if not self.app.has_openai_key() and not self._configure_ai():
+            return
+        self.ai_note_button.configure(state="disabled")
+        self.note_status_var.set("AI SEDANG MERAPIKAN CATATAN...")
+
+        def finished(result, error):
+            self.ai_note_button.configure(state="normal")
+            if error:
+                self.note_status_var.set("AI GAGAL  /  CATATAN TIDAK DIUBAH")
+                messagebox.showwarning("Rapikan dengan AI", error, parent=self.win)
+                return
+            self.note_body.delete("1.0", "end")
+            self.note_body.insert("1.0", result)
+            try:
+                note = self._persist_current_note()
+                if note:
+                    self._refresh_notes(select_id=note.id)
+            except Exception as exc:
+                messagebox.showwarning("Simpan catatan", str(exc), parent=self.win)
+            self.note_status_var.set("AI SELESAI  /  HASIL SUDAH TERSIMPAN")
+            if self.app.pets:
+                self.app.pets[0].set_state("happy")
+                self.app.pets[0].show_msg("Catatan sudah rapi!", 4)
+
+        self.app.organize_note_async(text, finished)
+
+    def _connect_google_calendar(self):
+        try:
+            has_client = bool(
+                self.app.secure_store.get("google_calendar_client", {})
+            )
+        except SecureStoreError as exc:
+            messagebox.showerror("Google Calendar", str(exc), parent=self.win)
+            return
+        credentials = None
+        if not has_client:
+            credentials = filedialog.askopenfilename(
+                parent=self.win,
+                title="Pilih OAuth Client JSON (Desktop app)",
+                filetypes=(("Google OAuth JSON", "*.json"), ("Semua file", "*.*")),
+            )
+            if not credentials:
+                return
+        self.calendar_status_label.configure(text="BUKA BROWSER UNTUK LOGIN")
+
+        def finished(success, error):
+            if not success:
+                messagebox.showwarning("Google Calendar", error, parent=self.win)
+            self.sync_from_app()
+
+        if self.app.connect_google_calendar_async(credentials, finished):
+            if self.app.pets:
+                self.app.pets[0].show_msg("Login Google di browser ya!", 7)
+
+    def _sync_google_calendar(self):
+        def finished(success, error):
+            if not success and error:
+                messagebox.showwarning("Google Calendar", error, parent=self.win)
+            self.sync_from_app()
+
+        self.app.sync_google_calendar_async(manual=True, callback=finished)
+
+    def _disconnect_google_calendar(self):
+        if not messagebox.askyesno(
+            "Putuskan Google Calendar",
+            "Hapus token akun Google dari komputer ini?",
+            parent=self.win,
+        ):
+            return
+        try:
+            self.app.disconnect_google_calendar()
+            self._calendar_rendered_ids = ()
+            self.sync_from_app()
+        except CalendarIntegrationError as exc:
+            messagebox.showerror("Google Calendar", str(exc), parent=self.win)
+
+    def _refresh_calendar_events(self):
+        signature = tuple(
+            (event.id, event.title, event.start.isoformat())
+            for event in self.app.calendar_events
+        )
+        if signature == self._calendar_rendered_ids:
+            return
+        self._calendar_rendered_ids = signature
+        self.calendar_list.delete(0, "end")
+        if not self.app.calendar_events:
+            self.calendar_list.insert("end", "Belum ada agenda untuk 7 hari ke depan.")
+            return
+        for event in self.app.calendar_events:
+            self.calendar_list.insert("end", event.display())
+
+    def _open_calendar_event(self, _event=None):
+        selection = self.calendar_list.curselection()
+        if not selection or selection[0] >= len(self.app.calendar_events):
+            return
+        link = self.app.calendar_events[selection[0]].html_link
+        if link:
+            webbrowser.open(link)
 
     def _pet_primary(self):
         if self.app.pets:
@@ -2673,6 +3044,17 @@ class ControlCenter:
                 fg=self.DARK if selected else self.TEXT,
             )
 
+        self.calendar_status_label.configure(
+            text=self.app.calendar_status,
+            fg=(
+                self.ACCENT
+                if "TERHUBUNG" in self.app.calendar_status
+                and "BELUM" not in self.app.calendar_status
+                else self.TEXT
+            ),
+        )
+        self._refresh_calendar_events()
+
         for key, bar in self.stat_bars.items():
             value = self.app.stats.get(key, 0)
             width = int(int(bar.cget("width")) * value / STAT_MAX)
@@ -2785,6 +3167,20 @@ class DogiApp:
         self.show_control_center_on_start = True
         self.control_center = None
 
+        # Catatan tersimpan lokal; API key dan token OAuth berada dalam blob
+        # DPAPI terpisah, tidak pernah masuk config.json atau notes.json.
+        self.ai_model = DEFAULT_AI_MODEL
+        self.note_store = NotesStore(NOTES_FILE)
+        self.secure_store = SecureStore(CREDENTIALS_FILE)
+        self.calendar_integration = GoogleCalendarIntegration(self.secure_store)
+        self.calendar_events = []
+        self.calendar_connected = False
+        self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
+        self.calendar_reminder_min = DEFAULT_CALENDAR_REMINDER_MIN
+        self._calendar_sync_at = 0.0
+        self._calendar_syncing = False
+        self._calendar_reminded = set()
+
         self.stats = dict(DEFAULT_STATS)
         self._last_stats_tick = time.time()
         self._stats_saved = time.time()
@@ -2819,6 +3215,12 @@ class DogiApp:
 
         self.theme = "Shiba"
         self._load_config()
+        try:
+            if self.calendar_integration.connected():
+                self.calendar_connected = True
+                self.calendar_status = "GOOGLE CALENDAR TERHUBUNG"
+        except SecureStoreError:
+            self.calendar_status = "KREDENSIAL WINDOWS TIDAK DAPAT DIBUKA"
         ensure_bark_wav(self.sound_style)
 
         if HAS_PYNPUT and not self.smoke_test:
@@ -2867,6 +3269,13 @@ class DogiApp:
             self.meeting_reaction_on = bool(cfg.get("meeting_reaction", True))
             self.meeting_bark_on = bool(cfg.get("meeting_bark", True))
             self.presentation_hide_on = bool(cfg.get("presentation_hide", True))
+            model = str(cfg.get("ai_model") or DEFAULT_AI_MODEL).strip()
+            self.ai_model = model[:80] or DEFAULT_AI_MODEL
+            reminder = cfg.get(
+                "calendar_reminder_min", DEFAULT_CALENDAR_REMINDER_MIN
+            )
+            if reminder in (5, 10, 15, 30):
+                self.calendar_reminder_min = reminder
             raw_stats = cfg.get("stats") or {}
             for key in self.stats:
                 if isinstance(raw_stats.get(key), (int, float)):
@@ -2900,6 +3309,8 @@ class DogiApp:
                         "meeting_reaction": self.meeting_reaction_on,
                         "meeting_bark": self.meeting_bark_on,
                         "presentation_hide": self.presentation_hide_on,
+                        "ai_model": self.ai_model,
+                        "calendar_reminder_min": self.calendar_reminder_min,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
                         "stats_ts": time.time(),
                         "last_greet_date": self.last_greet_date,
@@ -2970,6 +3381,165 @@ class DogiApp:
         hook 'done' tak pernah tiba), supaya tak membeku selamanya."""
         if self.agent_thinking and now - self._thinking_since > THINK_WATCHDOG_S:
             self.agent_thinking = False
+
+    # ----------------------------------------------- catatan AI & kalender
+    def has_openai_key(self):
+        try:
+            return bool(self.secure_store.get("openai_api_key", ""))
+        except SecureStoreError:
+            return False
+
+    def set_openai_key(self, api_key):
+        key = str(api_key or "").strip()
+        if not key:
+            self.secure_store.delete("openai_api_key")
+            return
+        self.secure_store.set("openai_api_key", key)
+
+    def organize_note_async(self, text, callback):
+        """Rapikan satu catatan tanpa memblokir animasi Tk."""
+        try:
+            api_key = self.secure_store.get("openai_api_key", "")
+        except SecureStoreError as exc:
+            callback(None, str(exc))
+            return False
+        if not api_key:
+            callback(None, "API key OpenAI belum diatur.")
+            return False
+
+        def worker():
+            try:
+                result = organize_note(text, api_key, model=self.ai_model)
+                error = None
+            except Exception as exc:
+                result, error = None, str(exc)
+            try:
+                self.root.after(0, lambda: callback(result, error))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def connect_google_calendar_async(self, credentials_path, callback=None):
+        if self._calendar_syncing:
+            return False
+        self._calendar_syncing = True
+        self.calendar_status = "MENUNGGU LOGIN GOOGLE DI BROWSER..."
+
+        def worker():
+            try:
+                if credentials_path:
+                    self.calendar_integration.import_client(credentials_path)
+                self.calendar_integration.authorize()
+                events = self.calendar_integration.upcoming()
+                error = None
+            except Exception as exc:
+                events, error = [], str(exc)
+            try:
+                self.root.after(
+                    0,
+                    lambda: self._finish_calendar_sync(
+                        events, error, callback=callback, connected=True
+                    ),
+                )
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def sync_google_calendar_async(self, manual=False, callback=None):
+        if self._calendar_syncing:
+            return False
+        if not self.calendar_connected:
+            self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
+            if manual and callback:
+                callback(False, "Hubungkan Google Calendar lebih dulu.")
+            return False
+
+        self._calendar_syncing = True
+        self.calendar_status = "MENYINKRONKAN AGENDA..."
+
+        def worker():
+            try:
+                events = self.calendar_integration.upcoming()
+                error = None
+            except Exception as exc:
+                events, error = [], str(exc)
+            try:
+                self.root.after(
+                    0,
+                    lambda: self._finish_calendar_sync(
+                        events, error, callback=callback, connected=False
+                    ),
+                )
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _finish_calendar_sync(self, events, error, callback=None, connected=False):
+        self._calendar_syncing = False
+        now = time.time()
+        if error:
+            self.calendar_status = f"GAGAL: {error}".upper()[:80]
+            self._calendar_sync_at = now + CALENDAR_RETRY_SECONDS
+        else:
+            self.calendar_connected = True
+            self.calendar_events = list(events)
+            count = len(self.calendar_events)
+            self.calendar_status = f"TERHUBUNG  /  {count} AGENDA 7 HARI"
+            self._calendar_sync_at = now + CALENDAR_SYNC_SECONDS
+            valid_ids = {event.id for event in self.calendar_events}
+            self._calendar_reminded.intersection_update(valid_ids)
+            if connected and self.pets:
+                self.pets[0].show_msg("Kalender terhubung!", 4)
+        if self.control_center:
+            self.control_center.sync_from_app()
+        if callback:
+            callback(not error, error)
+
+    def disconnect_google_calendar(self):
+        try:
+            self.calendar_integration.disconnect()
+        except SecureStoreError as exc:
+            raise CalendarIntegrationError(str(exc)) from exc
+        self.calendar_events = []
+        self.calendar_connected = False
+        self._calendar_reminded.clear()
+        self._calendar_sync_at = 0.0
+        self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
+
+    def _check_calendar(self, now):
+        if self.smoke_test:
+            return
+        if self.calendar_connected and now >= self._calendar_sync_at:
+            self.sync_google_calendar_async()
+        if not self.calendar_events:
+            return
+
+        current = datetime.fromtimestamp(now).astimezone()
+        for event in self.calendar_events:
+            if not reminder_due(
+                event,
+                current,
+                self.calendar_reminder_min,
+                self._calendar_reminded,
+            ):
+                continue
+            self._calendar_reminded.add(event.id)
+            remaining = max(
+                0, int((event.start.astimezone() - current).total_seconds() / 60)
+            )
+            title = event.title.strip()[:24] or "Agenda"
+            message = f"{title}: {remaining} mnt lagi"
+            if self.pets:
+                pet = self.pets[0]
+                pet.set_state("meeting_alert")
+                pet.show_msg(message, 8)
+            bark(self.root, self.sound_style)
 
     # ------------------------------------------------------- kebutuhan & jam
     def on_fed(self):
@@ -3463,6 +4033,7 @@ class DogiApp:
         self._check_needs(now)
         self._check_mischief(now)
         self._check_meeting(now)
+        self._check_calendar(now)
         self._apply_presentation(now)
 
         if self.pomo_end and now >= self.pomo_end:

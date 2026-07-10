@@ -11,3 +11,7 @@ release/
 .vscode/
 .DS_Store
 Thumbs.db
+.env
+credentials*.json
+client_secret*.json
+token*.json
