@@ -10,6 +10,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReferenceSpriteTests(unittest.TestCase):
+    def test_walk_cycle_has_four_distinct_leg_poses(self):
+        frames = dogi.SPRITE_FRAME_COUNTS["walk"]
+        self.assertEqual(frames, 4)
+        paths = [
+            ROOT / "assets" / "sprites" / "shiba" / f"walk_{index}.png"
+            for index in range(frames)
+        ]
+        images = [Image.open(path).convert("RGBA") for path in paths]
+        self.assertEqual(len({image.tobytes() for image in images}), 4)
+
+        # Area kaki harus berubah pada setiap pergantian frame; badan/ekor
+        # boleh ikut bob, tetapi langkah tidak boleh hanya berupa torso geser.
+        leg_boxes = [image.crop((20, 95, 150, 140)).tobytes()
+                     for image in images]
+        self.assertEqual(len(set(leg_boxes)), 4)
+
     def test_right_facing_art_mirrors_only_toward_left_motion(self):
         # Semua sprite digambar menghadap kanan: gerak kanan memakai art asli,
         # gerak kiri dicerminkan. Regresi "jalan kebalik" terjadi saat walk/

@@ -362,6 +362,47 @@ def approved_pose(rows, pose_name, head_mode="open", pupils="center",
     return grid
 
 
+def walking_canvas(phase, head_mode="open", pupils="center", bob=0,
+                   tongue=False, tail=0):
+    """Empat fase langkah dengan badan stabil dan kaki independen.
+
+    Bagian badan tetap memakai template run yang disetujui. Kaki bawaan
+    dibuang lalu dipasang ulang sebagai pasangan belakang/depan: contact,
+    passing, contact kebalikan, passing kebalikan. Ini membuat telapak jelas
+    berpindah tanpa mengubah bentuk wajah atau membuat perut bergetar.
+    """
+    canvas = blank()
+    x, y = 4, 5 + bob
+    pose = approved_pose(
+        APPROVED_RUN, "run", head_mode=head_mode, pupils=pupils,
+        tongue=tongue, tail_phase=tail,
+    )
+    # Baris 15-17 pada template lama berisi kaki statis.
+    for gy in range(15, len(pose)):
+        for gx in range(len(pose[gy])):
+            pose[gy][gx] = "."
+    stamp(canvas, pose, x, y)
+
+    root_y = y + 14
+    gait = {
+        # kaki belakang menjulur ke belakang, kaki depan ke depan
+        0: ((LEG_FORWARD, 1, 0), (LEG_TUCKED, 7, 0),
+            (LEG_TUCKED, 13, 0), (LEG_BACKWARD, 17, 0)),
+        # pasangan jauh menapak; pasangan dekat sedang terangkat
+        1: ((LEG_TUCKED, 3, -1), (LEG_STRAIGHT, 7, 0),
+            (LEG_STRAIGHT, 14, 0), (LEG_TUCKED, 19, -1)),
+        # ayunan berlawanan: belakang maju, depan mundur
+        2: ((LEG_BACKWARD, 2, 0), (LEG_TUCKED, 7, -1),
+            (LEG_FORWARD, 13, 0), (LEG_TUCKED, 18, -1)),
+        # passing kebalikan sebelum kembali ke fase pertama
+        3: ((LEG_STRAIGHT, 3, 0), (LEG_TUCKED, 8, -1),
+            (LEG_TUCKED, 13, -1), (LEG_STRAIGHT, 18, 0)),
+    }[phase]
+    for leg, offset_x, offset_y in gait:
+        stamp(canvas, leg, x + offset_x, root_y + offset_y)
+    return canvas
+
+
 # ------------------------------------------------------------- part: badan
 # Torso berdiri (tanpa kaki & tanpa ekor — ekor ditempel terpisah supaya
 # bisa berkibas antar frame).
@@ -592,8 +633,20 @@ LEG_Y = 22           # kaki berdiri: baris 22-26, telapak di 26
 def stand(head_mode="open", pupils="center", legs="stand",
           bob=0, tongue=False, bark=False, tail=0):
     """Dogi dari tiga template konsep: diam, bergerak, atau merunduk."""
+    gait_phases = {
+        "walk_a": 0,
+        "walk_mid_a": 1,
+        "walk_b": 2,
+        "walk_mid_b": 3,
+    }
+    if legs in gait_phases:
+        return walking_canvas(
+            gait_phases[legs], head_mode=head_mode, pupils=pupils, bob=bob,
+            tongue=tongue, tail=tail,
+        )
+
     canvas = blank()
-    if legs in ("walk_a", "walk_b", "splay"):
+    if legs == "splay":
         rows, pose_name, x, y = APPROVED_RUN, "run", 4, 5 + bob
     elif legs in ("tuck", "crouch"):
         rows, pose_name, x, y = APPROVED_CROUCH, "crouch", 4, 10 + bob
@@ -679,14 +732,16 @@ def build_frames() -> dict[str, list[list[str]]]:
     # walk: siklus kaki 4 langkah dengan goyangan badan
     frames["walk"] = [
         freeze(stand(legs="walk_a", tail=0)),
-        freeze(stand(bob=1, tail=1)),
+        freeze(stand(legs="walk_mid_a", bob=1, tail=1)),
         freeze(stand(legs="walk_b", tail=0)),
-        freeze(stand(bob=1, tail=1)),
+        freeze(stand(legs="walk_mid_b", bob=1, tail=1)),
     ]
 
     # chase/zoomies: langkah lebar + debu terlempar ke belakang
     chase = []
-    for index, legs in enumerate(("walk_a", "splay", "walk_b", "splay")):
+    for index, legs in enumerate(
+        ("walk_a", "walk_mid_a", "walk_b", "walk_mid_b")
+    ):
         canvas = stand(legs=legs, bob=index % 2, tongue=True, tail=index % 2)
         stamp(canvas, DUST, 1, 24 - (index % 2))
         chase.append(freeze(canvas))
