@@ -37,6 +37,7 @@ jobs:
           python scripts/draw_sprites.py
           python scripts/generate_assets.py
           python -m PyInstaller --noconfirm --clean DogiPet.spec
+          dist\DogiPet.exe --local-ai-smoke-test
           dist\DogiPet.exe --smoke-test
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/DogiPet.iss
           $hash = (Get-FileHash -Algorithm SHA256 release/DogiPet-Setup.exe).Hash.ToLowerInvariant()

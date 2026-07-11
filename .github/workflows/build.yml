@@ -24,8 +24,9 @@ jobs:
       - run: python scripts/draw_sprites.py
       - run: python scripts/generate_assets.py
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile dogi.py updater.py dogi_hook.py notes_ai.py meeting_ai.py meeting_recorder.py calendar_integration.py secure_store.py
+      - run: python -m py_compile dogi.py updater.py dogi_hook.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py calendar_integration.py secure_store.py
       - run: python -m PyInstaller --noconfirm --clean DogiPet.spec
+      - run: dist\DogiPet.exe --local-ai-smoke-test
       - run: dist\DogiPet.exe --smoke-test
       - uses: actions/upload-artifact@v4
         with:

@@ -88,6 +88,25 @@ class TranscriptTests(unittest.TestCase):
             self.assertIn("B: Dua", result.transcript)
             self.assertIn("Selesai", result.minutes)
 
+    def test_local_codex_pipeline_keeps_transcript_locally(self):
+        progress = []
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+            meeting_ai, "transcribe_audio_local", return_value="[00:00:01] Halo"
+        ), mock.patch.object(
+            meeting_ai, "create_minutes_with_codex", return_value="# Notulen lokal"
+        ):
+            audio = Path(temp) / "rapat.wav"
+            audio.write_bytes(b"RIFF")
+            result = meeting_ai.process_meeting_local_codex(
+                [audio],
+                Path(temp) / "output",
+                Path(temp) / "models",
+                progress=progress.append,
+            )
+        self.assertIn("Halo", result.transcript)
+        self.assertIn("Notulen lokal", result.minutes)
+        self.assertGreaterEqual(len(progress), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

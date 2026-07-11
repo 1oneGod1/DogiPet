@@ -1,4 +1,4 @@
-"""Transkripsi audio rapat dan pembuatan notulen melalui OpenAI."""
+"""Transkripsi audio dan notulen melalui OpenAI atau lokal + Codex."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import urllib.request
 import uuid
 
 from notes_ai import DEFAULT_AI_MODEL, extract_response_text
+from codex_integration import create_minutes_with_codex
+from local_transcriber import DEFAULT_LOCAL_MODEL, transcribe_audio_local
 
 
 OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
@@ -215,5 +217,40 @@ def process_meeting(
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     transcript_path = folder / f"transkrip-{stamp}.txt"
     transcript_path.write_text(combined, encoding="utf-8")
+    title = f"Notulen rapat - {datetime.now().strftime('%d %b %Y %H.%M')}"
+    return MeetingAIResult(title, minutes, combined, transcript_path)
+
+
+def process_meeting_local_codex(
+    audio_paths,
+    output_dir: str | Path,
+    model_dir: str | Path,
+    local_model: str = DEFAULT_LOCAL_MODEL,
+    progress=None,
+) -> MeetingAIResult:
+    """Audio tetap lokal; hanya transkrip teks yang dikirim lewat Codex CLI."""
+    paths = [Path(path) for path in audio_paths]
+    if not paths:
+        raise MeetingAIError("Pilih atau rekam audio rapat lebih dulu.")
+    sections = []
+    for index, path in enumerate(paths, 1):
+        if progress:
+            progress(f"TRANSKRIP LOKAL {index}/{len(paths)}  /  {path.name}")
+        transcript = transcribe_audio_local(
+            path,
+            model_name=local_model,
+            model_dir=model_dir,
+        )
+        sections.append(f"## Bagian {index}: {path.name}\n\n{transcript}")
+    combined = "\n\n".join(sections)
+
+    folder = Path(output_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    transcript_path = folder / f"transkrip-{stamp}.txt"
+    transcript_path.write_text(combined, encoding="utf-8")
+    if progress:
+        progress("CODEX SEDANG MENYUSUN NOTULEN...")
+    minutes = create_minutes_with_codex(combined)
     title = f"Notulen rapat - {datetime.now().strftime('%d %b %Y %H.%M')}"
     return MeetingAIResult(title, minutes, combined, transcript_path)

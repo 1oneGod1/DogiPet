@@ -127,12 +127,26 @@ dan menonaktifkan penyimpanan respons (`store: false`).
    atau **Mikrofon** untuk suara kamu dan ruangan.
 3. Pastikan semua peserta mengetahui dan menyetujui perekaman, lalu tekan
    **Mulai Rekam**. Tekan **Hentikan Rekaman** saat selesai.
-4. Tekan **Buat Notulen AI**. Kamu juga dapat memakai **Pilih Audio** untuk
-   memproses rekaman yang sudah ada.
+4. Pilih cara proses:
+   - **Lokal + Codex**: tekan **Hubungkan Codex**, selesaikan `codex login` resmi,
+     lalu tekan **Buat Notulen AI**. Audio ditranskripsi dengan Whisper di PC dan
+     hanya transkrip teks yang diberikan ke Codex.
+   - **OpenAI API**: tekan **Atur API key**, lalu **Buat Notulen AI** untuk
+     transkripsi dengan pemisahan pembicara.
+   Kamu juga dapat memakai **Pilih Audio** untuk memproses rekaman yang sudah ada.
 
 Perekaman tidak pernah dimulai otomatis. WAV tetap berada di
-`~/.dogi/recordings/`; audio baru dikirim setelah tombol AI ditekan. Transkripsi
-memakai `gpt-4o-transcribe-diarize` agar pembicara dipisahkan, mengikuti
+`~/.dogi/recordings/`. Pada mode **Lokal + Codex**, unduhan pertama model Whisper
+`small` sekitar ratusan MB dan dapat memerlukan beberapa menit. Model disimpan di
+`~/.dogi/whisper-models/`; audio tidak diunggah dan Codex CLI dijalankan dalam
+sandbox baca-saja dengan sesi sementara. DogiPet tidak membaca cache login,
+password, atau token Codex. Login mengikuti
+[autentikasi resmi Codex](https://developers.openai.com/codex/auth), sedangkan
+otomasi notulen memakai
+[`codex exec`](https://developers.openai.com/codex/noninteractive).
+
+Pada mode **OpenAI API**, audio baru dikirim setelah tombol AI ditekan.
+Transkripsi memakai `gpt-4o-transcribe-diarize` agar pembicara dipisahkan, mengikuti
 [panduan Speech to text OpenAI](https://developers.openai.com/api/docs/guides/speech-to-text).
 Setiap potongan dijaga di bawah batas unggahan 25 MB. Notulen dibuat melalui
 Responses API dengan `store: false`, sedangkan transkrip lengkap disimpan lokal.
@@ -234,7 +248,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py calendar_integration.py secure_store.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py calendar_integration.py secure_store.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>

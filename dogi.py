@@ -45,14 +45,22 @@ import pathlib
 import webbrowser
 
 import agent_hooks
+from codex_integration import (
+    CODEX_INSTALL_URL,
+    CodexIntegrationError,
+    CodexStatus,
+    codex_status,
+    start_codex_login,
+)
 from calendar_integration import (
     CalendarIntegrationError,
     GoogleCalendarIntegration,
     reminder_due,
 )
 import dogi_hook
-from meeting_ai import MeetingAIResult, process_meeting
+from meeting_ai import MeetingAIResult, process_meeting, process_meeting_local_codex
 from meeting_recorder import MeetingRecorder, MeetingRecorderError, RecordingResult
+from local_transcriber import DEFAULT_LOCAL_MODEL
 from notes_ai import DEFAULT_AI_MODEL, NotesStore, organize_note
 from secure_store import SecureStore, SecureStoreError
 import startup as startup_registry
@@ -145,6 +153,7 @@ STATUS_FILE = CONF_DIR / "agent_status.json"
 NOTES_FILE = CONF_DIR / "notes.json"
 CREDENTIALS_FILE = CONF_DIR / "credentials.bin"
 RECORDINGS_DIR = CONF_DIR / "recordings"
+WHISPER_MODELS_DIR = CONF_DIR / "whisper-models"
 CALENDAR_SYNC_SECONDS = 300
 CALENDAR_RETRY_SECONDS = 60
 DEFAULT_CALENDAR_REMINDER_MIN = 10
@@ -2465,6 +2474,39 @@ class ControlCenter:
         self._label(ai_body, "TRANSKRIP & NOTULEN AI", 8, self.MUTED, bold=True).pack(
             anchor="w"
         )
+
+        mode_row = tk.Frame(ai_body, bg=self.PANEL)
+        mode_row.pack(fill="x", pady=(8, 4))
+        self.meeting_mode_buttons = {}
+        for mode, label in (
+            ("local_codex", "LOKAL + CODEX"),
+            ("openai_api", "OPENAI API"),
+        ):
+            button = self._button(
+                mode_row,
+                label,
+                lambda value=mode: self._select_meeting_ai_mode(value),
+                width=17,
+            )
+            button.pack(side="left", padx=(0, 6))
+            self.meeting_mode_buttons[mode] = button
+        self.codex_connect_button = self._button(
+            mode_row,
+            "HUBUNGKAN CODEX",
+            self._connect_codex,
+            width=19,
+        )
+        self.codex_connect_button.pack(side="right")
+
+        self.codex_status_label = self._label(
+            ai_body,
+            "CODEX SEDANG DIPERIKSA...",
+            8,
+            self.MUTED,
+            wraplength=620,
+            justify="left",
+        )
+        self.codex_status_label.pack(anchor="w", pady=(2, 5))
         self.meeting_file_label = self._label(
             ai_body,
             "Belum ada rekaman dipilih.",
@@ -2484,7 +2526,7 @@ class ControlCenter:
             file_actions, "BUKA FOLDER", self._open_recordings_folder, width=16,
         ).pack(side="left", padx=(0, 6))
         self._button(
-            file_actions, "ATUR AI", self._configure_ai, width=12,
+            file_actions, "ATUR API KEY", self._configure_ai, width=14,
         ).pack(side="left")
         self.meeting_ai_button = self._button(
             file_actions,
@@ -2497,13 +2539,18 @@ class ControlCenter:
 
         self.meeting_ai_status_label = self._label(
             ai_body,
-            "Model transkripsi memisahkan pembicara. Hasil notulen masuk ke Catatan & Agenda.",
+            "Lokal + Codex menjaga audio di komputer; hanya transkrip dikirim ke Codex.",
             8,
             self.MUTED,
             wraplength=620,
             justify="left",
         )
-        self.meeting_ai_status_label.pack(anchor="w", pady=(14, 0))
+        # Status proses harus tetap terlihat pada layar berskala 200%; letakkan
+        # sebelum nama file dan tombol, bukan di ujung bawah kartu.
+        self.meeting_ai_status_label.pack(
+            anchor="w", pady=(2, 5), before=self.meeting_file_label
+        )
+        self._meeting_displayed_mode = None
 
     def _build_agent_page(self):
         page = self._new_page(
@@ -3085,6 +3132,43 @@ class ControlCenter:
         self.app.save_config()
         self.sync_from_app()
 
+    def _select_meeting_ai_mode(self, mode):
+        if self.app.meeting_processing:
+            return
+        self.app.meeting_ai_mode = (
+            "openai_api" if mode == "openai_api" else "local_codex"
+        )
+        self.app.save_config()
+        self.sync_from_app()
+
+    def _connect_codex(self):
+        if self.app.codex_checking:
+            return
+        if not self.app.codex_available:
+            if messagebox.askyesno(
+                "Codex CLI diperlukan",
+                "Codex CLI resmi belum ditemukan atau alias aplikasi Windows "
+                "tidak dapat dijalankan.\n\nBuka petunjuk instalasi resmi Codex CLI?",
+                parent=self.win,
+            ):
+                webbrowser.open(CODEX_INSTALL_URL)
+            return
+        if self.app.codex_authenticated:
+            self.app.refresh_codex_status_async()
+            return
+        try:
+            self.app.open_codex_login()
+        except CodexIntegrationError as exc:
+            messagebox.showerror("Hubungkan Codex", str(exc), parent=self.win)
+            return
+        messagebox.showinfo(
+            "Hubungkan Codex",
+            "Selesaikan login di jendela Codex/browser yang terbuka. DogiPet tidak "
+            "membaca password atau token. Setelah selesai, tekan CEK CODEX.",
+            parent=self.win,
+        )
+        self.app.root.after(4000, self.app.refresh_codex_status_async)
+
     def _toggle_meeting_recording(self):
         if self.app.meeting_recorder.recording:
             self.app.stop_meeting_recording()
@@ -3142,11 +3226,24 @@ class ControlCenter:
                 parent=self.win,
             )
             return
-        if not self.app.has_openai_key() and not self._configure_ai():
+        if self.app.meeting_ai_mode == "openai_api":
+            if not self.app.has_openai_key() and not self._configure_ai():
+                return
+        elif not self.app.codex_authenticated:
+            messagebox.showinfo(
+                "Hubungkan Codex",
+                "Hubungkan akun Codex terlebih dahulu. Jika baru selesai login, "
+                "tekan CEK CODEX lalu coba lagi.",
+                parent=self.win,
+            )
             return
         self.meeting_ai_button.configure(state="disabled")
         self.meeting_ai_status_label.configure(
-            text="AI sedang mentranskrip, memisahkan pembicara, lalu menyusun notulen...",
+            text=(
+                "Whisper lokal sedang mentranskrip. Unduhan model pertama bisa cukup lama..."
+                if self.app.meeting_ai_mode == "local_codex"
+                else "OpenAI sedang mentranskrip, memisahkan pembicara, lalu menyusun notulen..."
+            ),
             fg=self.ACCENT,
         )
 
@@ -3359,8 +3456,54 @@ class ControlCenter:
             self.meeting_file_label.configure(text=names)
         else:
             self.meeting_file_label.configure(text="Belum ada rekaman dipilih.")
+        for mode, button in self.meeting_mode_buttons.items():
+            selected = mode == self.app.meeting_ai_mode
+            button.configure(
+                state="disabled" if self.app.meeting_processing else "normal",
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+        self.codex_status_label.configure(
+            text=self.app.codex_status_text,
+            fg=self.ACCENT if self.app.codex_authenticated else self.MUTED,
+        )
+        if self.app.codex_checking:
+            codex_button_text = "MEMERIKSA..."
+        elif self.app.codex_authenticated:
+            codex_button_text = "CEK CODEX"
+        elif self.app.codex_available:
+            codex_button_text = "HUBUNGKAN CODEX"
+        else:
+            codex_button_text = "PASANG CODEX CLI"
+        self.codex_connect_button.configure(
+            text=codex_button_text,
+            state="disabled" if self.app.codex_checking else "normal",
+            bg=self.ACCENT if self.app.codex_authenticated else self.PANEL_ALT,
+            fg=self.DARK if self.app.codex_authenticated else self.TEXT,
+        )
+        if (
+            not self.app.meeting_processing
+            and self._meeting_displayed_mode != self.app.meeting_ai_mode
+        ):
+            self._meeting_displayed_mode = self.app.meeting_ai_mode
+            if self.app.meeting_ai_mode == "local_codex":
+                mode_detail = (
+                    "Audio ditranskripsi Whisper di komputer; hanya transkrip "
+                    "teks dikirim ke Codex."
+                )
+            else:
+                mode_detail = (
+                    "Audio dikirim ke OpenAI setelah tombol ditekan; mode ini "
+                    "dapat memisahkan label pembicara."
+                )
+            self.meeting_ai_status_label.configure(text=mode_detail, fg=self.MUTED)
         can_process = bool(files) and not recording and not self.app.meeting_processing
         self.meeting_ai_button.configure(state="normal" if can_process else "disabled")
+        if self.app.meeting_processing and self.app.meeting_processing_status:
+            self.meeting_ai_status_label.configure(
+                text=self.app.meeting_processing_status,
+                fg=self.ACCENT,
+            )
 
         for key, bar in self.stat_bars.items():
             value = self.app.stats.get(key, 0)
@@ -3482,9 +3625,16 @@ class DogiApp:
         self.calendar_integration = GoogleCalendarIntegration(self.secure_store)
         self.meeting_recorder = MeetingRecorder(RECORDINGS_DIR)
         self.meeting_record_source = "system"
+        self.meeting_ai_mode = "local_codex"
+        self.local_whisper_model = DEFAULT_LOCAL_MODEL
         self.meeting_audio_files = ()
         self.meeting_processing = False
+        self.meeting_processing_status = ""
         self.meeting_status = "SIAP MEREKAM"
+        self.codex_available = False
+        self.codex_authenticated = False
+        self.codex_checking = False
+        self.codex_status_text = "CODEX BELUM DIPERIKSA"
         self.calendar_events = []
         self.calendar_connected = False
         self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
@@ -3552,6 +3702,9 @@ class DogiApp:
         self.bones = []
         self.control_center = ControlCenter(self)
 
+        if not self.smoke_test:
+            self.root.after(600, self.refresh_codex_status_async)
+
         self.root.after(TICK_MS, self._tick)
         if self.show_control_center_on_start and not self.smoke_test:
             self.root.after(250, self.show_control_center)
@@ -3583,6 +3736,8 @@ class DogiApp:
             self.presentation_hide_on = bool(cfg.get("presentation_hide", True))
             if cfg.get("meeting_record_source") in ("system", "microphone"):
                 self.meeting_record_source = cfg["meeting_record_source"]
+            if cfg.get("meeting_ai_mode") in ("local_codex", "openai_api"):
+                self.meeting_ai_mode = cfg["meeting_ai_mode"]
             model = str(cfg.get("ai_model") or DEFAULT_AI_MODEL).strip()
             self.ai_model = model[:80] or DEFAULT_AI_MODEL
             reminder = cfg.get(
@@ -3624,6 +3779,7 @@ class DogiApp:
                         "meeting_bark": self.meeting_bark_on,
                         "presentation_hide": self.presentation_hide_on,
                         "meeting_record_source": self.meeting_record_source,
+                        "meeting_ai_mode": self.meeting_ai_mode,
                         "ai_model": self.ai_model,
                         "calendar_reminder_min": self.calendar_reminder_min,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
@@ -3773,29 +3929,50 @@ class DogiApp:
     def process_meeting_async(self, audio_files, callback):
         if self.meeting_processing:
             return False
-        try:
-            api_key = self.secure_store.get("openai_api_key", "")
-        except SecureStoreError as exc:
-            callback(None, str(exc))
-            return False
-        if not api_key:
-            callback(None, "API key OpenAI belum diatur.")
-            return False
+        mode = self.meeting_ai_mode
+        api_key = ""
+        if mode == "openai_api":
+            try:
+                api_key = self.secure_store.get("openai_api_key", "")
+            except SecureStoreError as exc:
+                callback(None, str(exc))
+                return False
+            if not api_key:
+                callback(None, "API key OpenAI belum diatur.")
+                return False
         files = tuple(pathlib.Path(path) for path in audio_files)
         self.meeting_processing = True
+        self.meeting_processing_status = "MENYIAPKAN PROSES NOTULEN..."
+
+        def progress(message):
+            self.meeting_processing_status = str(message)
 
         def worker():
             try:
-                result = process_meeting(
-                    files,
-                    api_key,
-                    output_dir=RECORDINGS_DIR / "transcripts",
-                    minutes_model=self.ai_model,
-                )
+                if mode == "local_codex":
+                    status = codex_status()
+                    if not status.authenticated:
+                        raise CodexIntegrationError(status.detail)
+                    result = process_meeting_local_codex(
+                        files,
+                        output_dir=RECORDINGS_DIR / "transcripts",
+                        model_dir=WHISPER_MODELS_DIR,
+                        local_model=self.local_whisper_model,
+                        progress=progress,
+                    )
+                else:
+                    progress("OPENAI SEDANG MEMBUAT TRANSKRIP & NOTULEN...")
+                    result = process_meeting(
+                        files,
+                        api_key,
+                        output_dir=RECORDINGS_DIR / "transcripts",
+                        minutes_model=self.ai_model,
+                    )
                 error = None
             except Exception as exc:
                 result, error = None, str(exc)
             self.meeting_processing = False
+            self.meeting_processing_status = ""
             try:
                 self.root.after(0, lambda: callback(result, error))
             except tk.TclError:
@@ -3805,6 +3982,40 @@ class DogiApp:
             target=worker, daemon=True, name="dogipet-meeting-ai"
         ).start()
         return True
+
+    def refresh_codex_status_async(self, callback=None):
+        if self.codex_checking:
+            return False
+        self.codex_checking = True
+        self.codex_status_text = "MEMERIKSA LOGIN CODEX..."
+
+        def worker():
+            status = codex_status()
+
+            def finish():
+                self.codex_checking = False
+                self.codex_available = status.available
+                self.codex_authenticated = status.authenticated
+                self.codex_status_text = status.detail.upper()
+                if self.control_center:
+                    self.control_center.sync_from_app()
+                if callback:
+                    callback(status)
+
+            try:
+                self.root.after(0, finish)
+            except tk.TclError:
+                pass
+
+        threading.Thread(
+            target=worker, daemon=True, name="dogipet-codex-status"
+        ).start()
+        return True
+
+    def open_codex_login(self):
+        executable = start_codex_login()
+        self.codex_status_text = "LOGIN CODEX DIBUKA  /  SELESAIKAN DI BROWSER"
+        return executable
 
     def connect_google_calendar_async(self, credentials_path, callback=None):
         if self._calendar_syncing:
@@ -4473,6 +4684,12 @@ if __name__ == "__main__":
         index = sys.argv.index("--hook")
         status = sys.argv[index + 1] if index + 1 < len(sys.argv) else "done"
         dogi_hook.write_status(status)
+        raise SystemExit(0)
+    if "--local-ai-smoke-test" in sys.argv:
+        # Memastikan library native hasil bundling PyInstaller dapat dimuat.
+        import av  # noqa: F401
+        import ctranslate2  # noqa: F401
+        from faster_whisper import WhisperModel  # noqa: F401
         raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
     if not acquire_single_instance(smoke_test=is_smoke_test):
