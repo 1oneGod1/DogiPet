@@ -48,10 +48,12 @@ import agent_hooks
 from codex_integration import (
     CODEX_INSTALL_URL,
     CodexIntegrationError,
-    CodexStatus,
+    ask_with_codex,
     codex_status,
+    organize_note_with_codex,
     start_codex_login,
 )
+from dogi_assistant import AssistantContext, build_assistant_context
 from calendar_integration import (
     CalendarIntegrationError,
     GoogleCalendarIntegration,
@@ -1853,6 +1855,8 @@ class ControlCenter:
         self._loading_note = False
         self._calendar_rendered_ids = ()
         self._hook_state = (0.0, False)  # (kapan dicek, terpasang?)
+        self._assistant_result = ""
+        self._assistant_result_title = "Hasil Tanya Dogi"
 
         self.pages = {}
         self.nav_buttons = {}
@@ -1862,6 +1866,7 @@ class ControlCenter:
         self._build_customize_page()
         self._build_focus_page()
         self._build_notes_page()
+        self._build_assistant_page()
         self._build_meeting_page()
         self._build_reactions_page()
         self._build_agent_page()
@@ -1969,6 +1974,7 @@ class ControlCenter:
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
             ("NOTES", "CATATAN & AGENDA"),
+            ("ASSISTANT", "TANYA DOGI"),
             ("MEETING", "REKAM RAPAT"),
             ("REACTIONS", "REAKSI"),
             ("AGENT", "AGENT AI"),
@@ -2377,6 +2383,143 @@ class ControlCenter:
         ).pack(fill="x", pady=4)
 
         self._refresh_notes(create_if_empty=True)
+
+    def _build_assistant_page(self):
+        page = self._new_page(
+            "ASSISTANT",
+            "TANYA DOGI. CODEX BANTU MENGINGAT.",
+            "Pilih sendiri data yang boleh dipakai; Dogi tidak membaca sumber lain.",
+        )
+
+        privacy = self._card(page)
+        privacy.pack(fill="x", pady=(0, 10))
+        privacy_header = tk.Frame(privacy, bg=self.PANEL)
+        privacy_header.pack(fill="x", padx=14, pady=(12, 6))
+        self._label(
+            privacy_header, "IZIN SUMBER", 8, self.MUTED, bold=True
+        ).pack(side="left")
+        self.assistant_codex_status_label = self._label(
+            privacy_header, "CODEX BELUM DIPERIKSA", 8, self.MUTED, bold=True
+        )
+        self.assistant_codex_status_label.pack(side="right")
+
+        source_row = tk.Frame(privacy, bg=self.PANEL)
+        source_row.pack(fill="x", padx=14, pady=(0, 7))
+        self.assistant_source_buttons = {}
+        for source, label in (
+            ("notes", "CATATAN"),
+            ("transcripts", "TRANSKRIP"),
+            ("calendar", "KALENDER"),
+        ):
+            button = self._button(
+                source_row,
+                label,
+                lambda value=source: self._toggle_assistant_source(value),
+                width=13,
+            )
+            button.pack(side="left", padx=(0, 6))
+            self.assistant_source_buttons[source] = button
+        self.assistant_codex_button = self._button(
+            source_row, "HUBUNGKAN CODEX", self._connect_codex, width=19
+        )
+        self.assistant_codex_button.pack(side="right")
+        self._label(
+            privacy,
+            "Hanya sumber berwarna kuning yang dikirim sebagai teks setelah kamu menekan tombol.",
+            7,
+            self.MUTED,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 11))
+
+        workspace = tk.Frame(page, bg=self.BG)
+        workspace.pack(fill="both", expand=True)
+
+        ask_card = self._card(workspace, width=300)
+        ask_card.pack(side="left", fill="both", padx=(0, 10))
+        ask_card.pack_propagate(False)
+        ask_body = tk.Frame(ask_card, bg=self.PANEL)
+        ask_body.pack(fill="both", expand=True, padx=14, pady=14)
+        self._label(ask_body, "AKSI CEPAT", 8, self.MUTED, bold=True).pack(anchor="w")
+        quick_row = tk.Frame(ask_body, bg=self.PANEL)
+        quick_row.pack(fill="x", pady=(5, 0))
+        self.assistant_action_buttons = []
+        for label, task in (
+            ("BRIEF", "daily_brief"),
+            ("ACTION", "action_items"),
+            ("FOLLOW-UP", "follow_up"),
+        ):
+            button = self._button(
+                quick_row,
+                label,
+                lambda value=task: self._run_assistant(value),
+                width=7,
+            )
+            button.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            self.assistant_action_buttons.append(button)
+
+        self._label(ask_body, "PERTANYAAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", pady=(14, 5)
+        )
+        self.assistant_question = tk.Text(
+            ask_body,
+            height=7,
+            wrap="word",
+            undo=True,
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            selectbackground="#635a2a",
+            relief="flat",
+            padx=9,
+            pady=8,
+            font=("Consolas", 9),
+        )
+        self.assistant_question.pack(fill="x")
+        self.assistant_ask_button = self._button(
+            ask_body, "TANYA CODEX", lambda: self._run_assistant("ask"),
+            accent=True, width=24,
+        )
+        self.assistant_ask_button.pack(fill="x", pady=(8, 0))
+        self.assistant_status_label = self._label(
+            ask_body, "SIAP  /  BELUM ADA DATA DIKIRIM", 7, self.MUTED,
+            wraplength=260, justify="left",
+        )
+        self.assistant_status_label.pack(anchor="w", pady=(6, 0))
+
+        result_card = self._card(workspace)
+        result_card.pack(side="left", fill="both", expand=True)
+        result_body = tk.Frame(result_card, bg=self.PANEL)
+        result_body.pack(fill="both", expand=True, padx=14, pady=14)
+        self._label(result_body, "JAWABAN DOGI", 8, self.MUTED, bold=True).pack(
+            anchor="w", pady=(0, 6)
+        )
+        self.assistant_result = tk.Text(
+            result_body,
+            height=15,
+            wrap="word",
+            bg=self.PANEL_ALT,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            selectbackground="#635a2a",
+            relief="flat",
+            padx=10,
+            pady=9,
+            font=("Consolas", 9),
+            state="disabled",
+        )
+        self.assistant_result.pack(fill="both", expand=True)
+        result_actions = tk.Frame(result_body, bg=self.PANEL)
+        result_actions.pack(fill="x", pady=(8, 0))
+        self.assistant_copy_button = self._button(
+            result_actions, "SALIN", self._copy_assistant_result, width=10
+        )
+        self.assistant_copy_button.pack(side="left")
+        self.assistant_save_button = self._button(
+            result_actions, "SIMPAN KE CATATAN", self._save_assistant_result,
+            accent=True, width=19,
+        )
+        self.assistant_save_button.pack(side="right")
 
     def _build_meeting_page(self):
         page = self._new_page(
@@ -3023,10 +3166,14 @@ class ControlCenter:
 
     def _organize_current_note(self):
         text = self.note_body.get("1.0", "end-1c")
-        if not self.app.has_openai_key() and not self._configure_ai():
+        use_codex = self.app.codex_authenticated
+        if not use_codex and not self.app.has_openai_key() and not self._configure_ai():
             return
         self.ai_note_button.configure(state="disabled")
-        self.note_status_var.set("AI SEDANG MERAPIKAN CATATAN...")
+        self.note_status_var.set(
+            "CODEX SEDANG MERAPIKAN CATATAN..."
+            if use_codex else "OPENAI SEDANG MERAPIKAN CATATAN..."
+        )
 
         def finished(result, error):
             self.ai_note_button.configure(state="normal")
@@ -3042,12 +3189,125 @@ class ControlCenter:
                     self._refresh_notes(select_id=note.id)
             except Exception as exc:
                 messagebox.showwarning("Simpan catatan", str(exc), parent=self.win)
-            self.note_status_var.set("AI SELESAI  /  HASIL SUDAH TERSIMPAN")
+            self.note_status_var.set(
+                ("CODEX" if use_codex else "OPENAI")
+                + " SELESAI  /  HASIL SUDAH TERSIMPAN"
+            )
             if self.app.pets:
                 self.app.pets[0].set_state("happy")
                 self.app.pets[0].show_msg("Catatan sudah rapi!", 4)
 
         self.app.organize_note_async(text, finished)
+
+    # ----------------------------------------------------------- Tanya Dogi
+    def _toggle_assistant_source(self, source):
+        if self.app.assistant_processing:
+            return
+        if source in self.app.assistant_sources:
+            self.app.assistant_sources.remove(source)
+        else:
+            self.app.assistant_sources.add(source)
+        self.app.save_config()
+        self.sync_from_app()
+
+    def _set_assistant_result(self, text):
+        self._assistant_result = str(text or "")
+        self.assistant_result.configure(state="normal")
+        self.assistant_result.delete("1.0", "end")
+        self.assistant_result.insert("1.0", self._assistant_result)
+        self.assistant_result.configure(state="disabled")
+
+    def _run_assistant(self, task):
+        if self.app.assistant_processing:
+            return
+        if not self.app.codex_authenticated:
+            messagebox.showinfo(
+                "Tanya Dogi",
+                "Hubungkan akun Codex terlebih dahulu. DogiPet tidak membaca "
+                "password atau token akunmu.",
+                parent=self.win,
+            )
+            return
+        sources = set(self.app.assistant_sources)
+        if not sources:
+            messagebox.showinfo(
+                "Tanya Dogi", "Pilih minimal satu sumber berwarna kuning.",
+                parent=self.win,
+            )
+            return
+        question = self.assistant_question.get("1.0", "end-1c").strip()
+        defaults = {
+            "daily_brief": "Apa yang perlu saya ketahui dan prioritaskan hari ini?",
+            "action_items": "Temukan semua action item yang masih relevan.",
+            "follow_up": "Buat draf follow-up dari rapat terbaru dalam konteks.",
+        }
+        if task != "ask":
+            question = defaults.get(task, question)
+        if not question:
+            messagebox.showinfo(
+                "Tanya Dogi", "Tulis pertanyaan terlebih dahulu.", parent=self.win
+            )
+            return
+
+        titles = {
+            "ask": "Jawaban Tanya Dogi",
+            "daily_brief": "Daily Brief Dogi",
+            "action_items": "Action Items dari Dogi",
+            "follow_up": "Draf Follow-up Dogi",
+        }
+        self._assistant_result_title = (
+            f"{titles.get(task, 'Tanya Dogi')} - {datetime.now().strftime('%d %b %Y %H.%M')}"
+        )
+        self._set_assistant_result("")
+        self.app.assistant_status = "MENYIAPKAN KONTEKS LOKAL..."
+        self.sync_from_app()
+
+        def finished(result, context, error):
+            if error:
+                self.app.assistant_status = "CODEX GAGAL  /  DATA LOKAL TIDAK DIUBAH"
+                messagebox.showwarning("Tanya Dogi", error, parent=self.win)
+                self.sync_from_app()
+                return
+            if not isinstance(context, AssistantContext):
+                return
+            self._set_assistant_result(result)
+            suffix = " / KONTEKS DIPOTONG" if context.truncated else ""
+            self.app.assistant_status = (
+                f"SELESAI  /  {context.source_summary.upper()}{suffix}"
+            )
+            self.sync_from_app()
+            if self.app.pets:
+                self.app.pets[0].set_state("happy")
+                self.app.pets[0].show_msg("Aku menemukan jawabannya!", 4)
+
+        self.app.ask_dogi_async(question, sources, task, finished)
+
+    def _copy_assistant_result(self):
+        if not self._assistant_result:
+            return
+        self.win.clipboard_clear()
+        self.win.clipboard_append(self._assistant_result)
+        self.app.assistant_status = "JAWABAN DISALIN KE CLIPBOARD"
+        self.sync_from_app()
+
+    def _save_assistant_result(self):
+        if not self._assistant_result:
+            messagebox.showinfo(
+                "Tanya Dogi", "Belum ada jawaban untuk disimpan.", parent=self.win
+            )
+            return
+        try:
+            note = self.app.note_store.create(
+                self._assistant_result_title, self._assistant_result
+            )
+            self._refresh_notes(select_id=note.id)
+        except Exception as exc:
+            messagebox.showerror("Simpan jawaban Dogi", str(exc), parent=self.win)
+            return
+        self.app.assistant_status = "JAWABAN TERSIMPAN DI CATATAN & AGENDA"
+        self.sync_from_app()
+        if self.app.pets:
+            self.app.pets[0].show_msg("Jawabannya kusimpan!", 3)
 
     def _connect_google_calendar(self):
         try:
@@ -3505,6 +3765,41 @@ class ControlCenter:
                 fg=self.ACCENT,
             )
 
+        # Tanya Dogi memakai status login Codex yang sama, tetapi setiap sumber
+        # tetap opt-in dan terlihat jelas sebelum teks dikirim.
+        for source, button in self.assistant_source_buttons.items():
+            selected = source in self.app.assistant_sources
+            button.configure(
+                state="disabled" if self.app.assistant_processing else "normal",
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+        self.assistant_codex_status_label.configure(
+            text=self.app.codex_status_text,
+            fg=self.ACCENT if self.app.codex_authenticated else self.MUTED,
+        )
+        self.assistant_codex_button.configure(
+            text=codex_button_text,
+            state=(
+                "disabled"
+                if self.app.codex_checking or self.app.assistant_processing
+                else "normal"
+            ),
+            bg=self.ACCENT if self.app.codex_authenticated else self.PANEL_ALT,
+            fg=self.DARK if self.app.codex_authenticated else self.TEXT,
+        )
+        assistant_state = "disabled" if self.app.assistant_processing else "normal"
+        self.assistant_ask_button.configure(state=assistant_state)
+        for button in self.assistant_action_buttons:
+            button.configure(state=assistant_state)
+        self.assistant_status_label.configure(
+            text=self.app.assistant_status,
+            fg=self.ACCENT if self.app.assistant_processing else self.MUTED,
+        )
+        has_result = bool(self._assistant_result) and not self.app.assistant_processing
+        self.assistant_copy_button.configure(state="normal" if has_result else "disabled")
+        self.assistant_save_button.configure(state="normal" if has_result else "disabled")
+
         for key, bar in self.stat_bars.items():
             value = self.app.stats.get(key, 0)
             width = int(int(bar.cget("width")) * value / STAT_MAX)
@@ -3635,6 +3930,9 @@ class DogiApp:
         self.codex_authenticated = False
         self.codex_checking = False
         self.codex_status_text = "CODEX BELUM DIPERIKSA"
+        self.assistant_sources = {"notes"}
+        self.assistant_processing = False
+        self.assistant_status = "SIAP  /  BELUM ADA DATA DIKIRIM"
         self.calendar_events = []
         self.calendar_connected = False
         self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
@@ -3738,6 +4036,14 @@ class DogiApp:
                 self.meeting_record_source = cfg["meeting_record_source"]
             if cfg.get("meeting_ai_mode") in ("local_codex", "openai_api"):
                 self.meeting_ai_mode = cfg["meeting_ai_mode"]
+            configured_sources = cfg.get("assistant_sources")
+            if isinstance(configured_sources, list):
+                valid_sources = {
+                    item for item in configured_sources
+                    if item in {"notes", "transcripts", "calendar"}
+                }
+                if valid_sources:
+                    self.assistant_sources = valid_sources
             model = str(cfg.get("ai_model") or DEFAULT_AI_MODEL).strip()
             self.ai_model = model[:80] or DEFAULT_AI_MODEL
             reminder = cfg.get(
@@ -3780,6 +4086,7 @@ class DogiApp:
                         "presentation_hide": self.presentation_hide_on,
                         "meeting_record_source": self.meeting_record_source,
                         "meeting_ai_mode": self.meeting_ai_mode,
+                        "assistant_sources": sorted(self.assistant_sources),
                         "ai_model": self.ai_model,
                         "calendar_reminder_min": self.calendar_reminder_min,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
@@ -3869,18 +4176,24 @@ class DogiApp:
 
     def organize_note_async(self, text, callback):
         """Rapikan satu catatan tanpa memblokir animasi Tk."""
-        try:
-            api_key = self.secure_store.get("openai_api_key", "")
-        except SecureStoreError as exc:
-            callback(None, str(exc))
-            return False
-        if not api_key:
-            callback(None, "API key OpenAI belum diatur.")
-            return False
+        use_codex = self.codex_authenticated
+        api_key = ""
+        if not use_codex:
+            try:
+                api_key = self.secure_store.get("openai_api_key", "")
+            except SecureStoreError as exc:
+                callback(None, str(exc))
+                return False
+            if not api_key:
+                callback(None, "Hubungkan Codex atau atur API key OpenAI.")
+                return False
 
         def worker():
             try:
-                result = organize_note(text, api_key, model=self.ai_model)
+                if use_codex:
+                    result = organize_note_with_codex(text)
+                else:
+                    result = organize_note(text, api_key, model=self.ai_model)
                 error = None
             except Exception as exc:
                 result, error = None, str(exc)
@@ -3890,6 +4203,48 @@ class DogiApp:
                 pass
 
         threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def ask_dogi_async(self, question, sources, task, callback):
+        """Bangun konteks pilihan pengguna dan kirim teksnya ke Codex."""
+        if self.assistant_processing:
+            return False
+        self.assistant_processing = True
+        self.assistant_status = "MEMERIKSA CODEX..."
+        selected = set(sources or ())
+        events = tuple(self.calendar_events)
+
+        def worker():
+            context = None
+            try:
+                status = codex_status()
+                if not status.authenticated:
+                    raise CodexIntegrationError(status.detail)
+                self.assistant_status = "MENYUSUN KONTEKS YANG DIIZINKAN..."
+                context = build_assistant_context(
+                    sources=selected,
+                    note_store=self.note_store,
+                    transcript_dir=RECORDINGS_DIR / "transcripts",
+                    calendar_events=events,
+                )
+                self.assistant_status = (
+                    f"CODEX MEMBACA {context.source_summary.upper()}..."
+                )
+                result = ask_with_codex(
+                    question, context.text, task=task
+                )
+                error = None
+            except Exception as exc:
+                result, error = None, str(exc)
+            self.assistant_processing = False
+            try:
+                self.root.after(0, lambda: callback(result, context, error))
+            except tk.TclError:
+                pass
+
+        threading.Thread(
+            target=worker, daemon=True, name="dogipet-codex-assistant"
+        ).start()
         return True
 
     def start_meeting_recording(self):

@@ -75,9 +75,13 @@ sementara desktop pet tetap aktif.
 - Halaman **Catatan & Agenda** dengan banyak catatan lokal, autosave ketika
   berpindah catatan, serta tombol **Rapikan AI** yang mengubah catatan acak
   menjadi Markdown terstruktur tanpa menambah fakta baru.
-- OpenAI Responses API bersifat opsional dan hanya dipanggil ketika tombol
-  Rapikan AI ditekan. Model default `gpt-5.6-luna`; API key dienkripsi memakai
-  Windows DPAPI dan tidak ditulis ke repository atau `config.json`.
+- Jika akun Codex sudah terhubung, **Rapikan AI** otomatis menggunakan Codex;
+  OpenAI Responses API tetap tersedia sebagai fallback opsional. API key
+  dienkripsi memakai Windows DPAPI dan tidak masuk repository atau `config.json`.
+- Halaman **Tanya Dogi** memberi izin sumber terpisah untuk Catatan, Transkrip,
+  dan Kalender. Pengguna dapat bertanya bebas, membuat brief hari ini, mencari
+  action item, membuat draf follow-up, menyalin hasil, atau menyimpannya kembali
+  sebagai catatan.
 - Halaman **Rekam Rapat** merekam mikrofon atau audio meeting dari speaker/
   headset melalui WASAPI. Audio disimpan lokal sebagai WAV mono 16 kHz dan
   otomatis dipotong per sembilan menit agar aman untuk transkripsi.
@@ -110,15 +114,35 @@ Klik kanan Dogi untuk membuka menu fitur dan pengaturan.
 
 1. Buka **Control Center → Catatan & Agenda**.
 2. Buat atau pilih catatan, lalu tekan **Simpan**.
-3. Tekan **Atur AI** dan masukkan OpenAI API key milikmu.
-4. Tekan **Rapikan AI**. Hanya isi catatan yang sedang terbuka yang dikirim ke
-   OpenAI; hasil langsung dikembalikan ke editor dan disimpan lokal.
+3. Hubungkan Codex dari halaman **Tanya Dogi** atau **Rekam Rapat**.
+4. Tekan **Rapikan AI**. Hanya isi catatan terbuka yang diberikan ke Codex;
+   hasil langsung dikembalikan ke editor dan disimpan lokal.
+
+Jika Codex belum terhubung, tombol tersebut tetap dapat memakai OpenAI API
+setelah kamu menekan **Atur AI** dan memasukkan API key.
 
 API key disimpan di `~/.dogi/credentials.bin` sebagai blob terenkripsi Windows
 DPAPI. Catatan biasa tetap berada di `~/.dogi/notes.json`, sehingga masih dapat
 dipakai tanpa akun AI atau internet. Implementasi memakai
 [OpenAI Responses API](https://developers.openai.com/api/docs/guides/text)
 dan menonaktifkan penyimpanan respons (`store: false`).
+
+## Tanya Dogi dengan Codex
+
+1. Buka **Control Center → Tanya Dogi**.
+2. Aktifkan hanya sumber yang diizinkan: **Catatan**, **Transkrip**, dan/atau
+   **Kalender**. Sumber kuning berarti aktif.
+3. Tulis pertanyaan lalu tekan **Tanya Codex**, atau gunakan **Brief Hari Ini**,
+   **Cari Action Item**, maupun **Draf Follow-up**.
+4. Periksa jawabannya, kemudian pilih **Salin** atau **Simpan ke Catatan**.
+
+Tidak ada pemindaian otomatis. DogiPet hanya membaca maksimal 30 catatan terbaru
+dan 12 transkrip terbaru dari sumber yang dipilih setelah tombol ditekan. Semua
+konteks dibatasi ukurannya, diperlakukan sebagai data tidak tepercaya, dan
+dikirim melalui `codex exec` dalam sandbox baca-saja dari folder kerja kosong.
+DogiPet tidak menyediakan aksi untuk mengubah kalender atau mengirim email;
+instruksi Codex juga secara eksplisit melarang membaca file dan menjalankan
+perintah untuk permintaan ini.
 
 ## Rekam rapat dan buat notulen
 
@@ -248,7 +272,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py calendar_integration.py secure_store.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py dogi_assistant.py calendar_integration.py secure_store.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>
