@@ -571,6 +571,23 @@ kllllllllk
 kkkkkkkkkk
 """)
 
+# Keyboard terpisah untuk state mengetik. Bentuknya sengaja lebar dan rendah
+# supaya tetap terbaca sebagai deretan tombol pada sprite 5 px, bukan laptop
+# kedua yang terpotong di sisi kanvas.
+KEYBOARD = part("""
+.kllllllllllk.
+kllllllllllllk
+kllllllllllllk
+.kkkkkkkkkkkk.
+""")
+
+MOUSE = part("""
+.kk.
+kllk
+kllk
+.kk.
+""")
+
 BONE = part("""
 kk...kk
 kwwwwwk
@@ -695,9 +712,42 @@ def hanging(swing=0, head_mode="open"):
     return canvas
 
 
-def laptop_pose(pupils="right", head_mode="open", paw_phase=0,
+def keyboard_pose(paw_phase=0, key_phase=0, blush_level=0, tail=0,
+                  head_mode="open"):
+    """Dogi mengetik di keyboard terpisah dengan pipi makin memerah."""
+    canvas = sitting(head_mode=head_mode, pupils="center", tail=tail)
+    stamp(canvas, KEYBOARD, 17, 24)
+
+    # Tombol biru bergantian tepat di bawah telapak yang sedang menekan.
+    left_key = 19 + (key_phase % 3)
+    right_key = 24 + ((key_phase + 1) % 3)
+    patch(canvas, [(25, left_key, "b"), (25, right_key, "b")])
+
+    # Kedua telapak naik-turun berlawanan sehingga gestur benar-benar terbaca
+    # sebagai mengetik, bukan hanya Dogi duduk di depan prop.
+    if paw_phase == 0:
+        stamp(canvas, PAW, 18, 21)
+        stamp(canvas, PAW, 23, 23)
+    else:
+        stamp(canvas, PAW, 18, 23)
+        stamp(canvas, PAW, 23, 21)
+
+    # Pipi empat tahap: normal, hangat, merah, sangat merah. Koordinat ini
+    # berada satu baris di bawah kedua mata pada template crouch.
+    blush = {
+        0: (),
+        1: ((14, 16), (14, 20)),
+        2: ((13, 16), (14, 16), (13, 20), (14, 20)),
+        3: ((13, 16), (14, 16), (14, 17),
+            (13, 20), (14, 20), (15, 20)),
+    }[max(0, min(3, blush_level))]
+    patch(canvas, [(gy, gx, "r") for gy, gx in blush])
+    return canvas
+
+
+def laptop_pose(pupils="right", head_mode="open", scroll_phase=0,
                 code_shift=0, thumb_row=None, tail=0):
-    """Dogi duduk mengetik; layar berisi baris kode yang bisa digeser."""
+    """Dogi memakai mouse; layar dan scrollbar bergerak saat scrolling."""
     canvas = sitting(head_mode=head_mode, pupils=pupils, tail=tail)
     stamp(canvas, LAPTOP, 21, 14)
     # baris kode pada layar (kolom 26-28, baris 15-23)
@@ -707,13 +757,11 @@ def laptop_pose(pupils="right", head_mode="open", paw_phase=0,
         patch(canvas, [(shifted, 26 + i, "b") for i in range(length)])
     if thumb_row is not None:
         patch(canvas, [(thumb_row, 29, "r")])
-    # kaki depan mengetik bergantian di atas alas keyboard (baris 24-25)
-    if paw_phase == 0:
-        stamp(canvas, PAW, 19, 21)
-        stamp(canvas, PAW, 22, 23)
-    else:
-        stamp(canvas, PAW, 19, 23)
-        stamp(canvas, PAW, 22, 21)
+    # Satu telapak menggerakkan mouse naik-turun; telapak lain diam. Ini
+    # membedakan siluet scrolling dari dua telapak mengetik pada keyboard.
+    stamp(canvas, MOUSE, 17, 24)
+    stamp(canvas, PAW, 18, 21 + (scroll_phase % 2))
+    stamp(canvas, PAW, 21, 22)
     return canvas
 
 
@@ -828,24 +876,26 @@ def build_frames() -> dict[str, list[list[str]]]:
         freeze(hanging(swing=-1)),
     ]
 
-    # type: 7 pose unik + frame penutup identik dengan frame 0 supaya
-    # loop menutup mulus (kontrak test_typing_loop_closes_on_the_same_pose)
-    type_frames = [
-        freeze(laptop_pose(paw_phase=(0, 1, 0, 1, 0, 1, 1)[index],
-                           code_shift=(0, 0, 1, 1, 2, 2, 3)[index],
-                           head_mode="blink" if index == 5 else "open",
-                           tail=index % 2))
-        for index in range(7)
+    # type: empat tahap lelah x empat fase tombol. Runtime memilih kelompok
+    # tahap berdasarkan berapa lama pengguna terus mengetik.
+    frames["type"] = [
+        freeze(keyboard_pose(
+            paw_phase=phase % 2,
+            key_phase=phase,
+            blush_level=heat,
+            head_mode="blink" if phase == 3 and heat >= 2 else "open",
+            tail=phase % 2,
+        ))
+        for heat in range(4)
+        for phase in range(4)
     ]
-    type_frames.append(type_frames[0])
-    frames["type"] = type_frames
 
     # scroll: penanda 'r' merambat di bezel layar, konten ikut bergeser
     for state, thumb_rows in (("scroll_up", (21, 19, 17, 15)),
                               ("scroll_down", (15, 17, 19, 21))):
         direction = -1 if state == "scroll_up" else 1
         frames[state] = [
-            freeze(laptop_pose(paw_phase=index % 2,
+            freeze(laptop_pose(scroll_phase=index % 2,
                                code_shift=(-direction * index) % 8,
                                thumb_row=thumb_rows[index],
                                tail=index % 2))
@@ -964,7 +1014,7 @@ def main() -> None:
     frames = build_frames()
     expected = {
         "idle": 4, "walk": 4, "chase": 4, "fetch": 4, "sleep": 4,
-        "happy": 4, "dig": 4, "eat": 4, "hold": 4, "type": 8,
+        "happy": 4, "dig": 4, "eat": 4, "hold": 4, "type": 16,
         "scroll_up": 4, "scroll_down": 4, "meeting_alert": 4,
         "meeting_watch": 4, "think": 4, "tail_wag": 4,
         "jump": 4, "dizzy": 4, "pee": 4,

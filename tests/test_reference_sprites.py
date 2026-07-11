@@ -40,27 +40,54 @@ class ReferenceSpriteTests(unittest.TestCase):
         frames = [dogi.sprite_frame_index("think", tick) for tick in range(12)]
         self.assertEqual(frames, [0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 1, 1])
 
-    def test_typing_animation_uses_eight_frame_strip(self):
-        frames = [dogi.sprite_frame_index("type", tick) for tick in range(8)]
-        self.assertEqual(frames, list(range(8)))
+    def test_typing_animation_has_four_heat_levels(self):
+        self.assertEqual(dogi.SPRITE_FRAME_COUNTS["type"], 16)
+        for heat in range(4):
+            with self.subTest(heat=heat):
+                frames = [dogi.typing_frame_index(tick, heat)
+                          for tick in range(4)]
+                self.assertEqual(frames, list(range(heat * 4, heat * 4 + 4)))
 
-    def test_typing_loop_closes_on_the_same_pose(self):
+    def test_typing_heat_levels_get_progressively_redder(self):
         root = ROOT / "assets" / "sprites" / "coklat"
-        self.assertEqual(
-            Image.open(root / "type_0.png").tobytes(),
-            Image.open(root / "type_7.png").tobytes(),
-        )
+        blush = (255, 90, 121, 255)
+        red_counts = []
+        for index in (0, 4, 8, 12):
+            image = Image.open(root / f"type_{index}.png").convert("RGBA")
+            red_counts.append(sum(
+                pixel == blush for pixel in image.get_flattened_data()
+            ))
+        self.assertEqual(red_counts, sorted(red_counts))
+        self.assertEqual(len(set(red_counts)), 4)
 
-    def test_typing_laptop_has_complete_screen_and_keyboard_base(self):
+    def test_typing_has_complete_standalone_keyboard(self):
         root = ROOT / "assets" / "sprites" / "coklat"
-        for index in range(8):
+        for index in range(16):
             image = Image.open(root / f"type_{index}.png").convert("RGBA")
             with self.subTest(frame=index):
-                # Logical laptop base is x=21..29, y=25..27 at SCALE=5.
-                self.assertNotEqual(image.getpixel((110, 130))[3], 0)
-                self.assertNotEqual(image.getpixel((145, 135))[3], 0)
-                self.assertNotEqual(image.getpixel((135, 110))[3], 0)
+                # Keyboard mandiri berada di x=17..30, y=24..27.
+                self.assertNotEqual(image.getpixel((90, 125))[3], 0)
+                self.assertNotEqual(image.getpixel((145, 130))[3], 0)
+                self.assertNotEqual(image.getpixel((100, 125))[3], 0)
                 self.assertLess(image.getbbox()[2], image.width)
+
+    def test_typing_and_scrolling_use_different_props(self):
+        root = ROOT / "assets" / "sprites" / "coklat"
+        typing = Image.open(root / "type_0.png").convert("RGBA")
+        scrolling = Image.open(root / "scroll_down_0.png").convert("RGBA")
+        # Area layar tegak hanya boleh muncul pada scrolling; typing memakai
+        # keyboard rendah dengan dua telapak aktif.
+        screen_box = (105, 70, 155, 120)
+        self.assertNotEqual(
+            typing.crop(screen_box).tobytes(), scrolling.crop(screen_box).tobytes()
+        )
+
+    def test_typing_heat_thresholds_are_gradual(self):
+        self.assertEqual(
+            [dogi.typing_heat_level(seconds)
+             for seconds in (0, 7.9, 8, 19.9, 20, 44.9, 45, 200)],
+            [0, 0, 1, 1, 2, 2, 3, 3],
+        )
 
     def test_extra_behaviors_map_to_existing_animation_assets(self):
         self.assertEqual(dogi.sprite_asset_state("curious"), "think")

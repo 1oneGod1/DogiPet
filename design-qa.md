@@ -1,4 +1,4 @@
-# Design QA — DogiPet 0.6.0
+# Design QA — DogiPet 0.6.1
 
 **Source visual truth**
 
@@ -20,8 +20,8 @@
 - `qa/think-animation-v052.png` — urutan ping-pong bingung yang dipakai app.
 - `qa/walk-right-v052.png` dan `qa/run-right-v052.png` — frame sumber-kiri
   setelah dicerminkan untuk gerakan ke kanan.
-- `qa/type-animation-v054.png` — strip mengetik baru dengan delapan frame,
-  tubuh/laptop stabil, paw bergantian, dan pose penutup sama dengan pose awal.
+- `qa/handmade-sprites.png` — strip mengetik 16 frame dengan keyboard mandiri,
+  paw bergantian, empat tahap merah wajah, serta scroll dengan laptop + mouse.
 - `qa/behaviors-v054.png` — empat tingkah spontan baru: curious, tail wag,
   beg, dan zoomies.
 
@@ -29,7 +29,7 @@
 
 - Windows 11, display scaling 125%.
 - Pet viewport 230 × 176 logical px; state `idle`.
-- Full sheet: 19 state; 18 state memakai 4 frame dan mengetik memakai 8 frame.
+- Full sheet: 19 state; 18 state memakai 4 frame dan mengetik memakai 16 frame.
 
 **Full-view comparison evidence**
 
@@ -75,11 +75,10 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
   transisi siklus tidak lagi melompat dari frame terakhir ke pertama.
 - Arah visual walk/chase/fetch dicatat dari delta `x` aktual setiap tick; arah
   target atau kursor tidak dapat membuat sprite tampak berjalan mundur.
-- Mengetik memakai delapan frame konsisten dan mempertahankan state `type`
-  selama input aktif, tanpa satu frame idle saat timer internal diperbarui.
-- Laptop dibangun ulang pada grid 32 × 28: screen 4 × 8 logical px dan base
-  keyboard 9 × 3 logical px; seluruh frame memiliki padding kanan dan tidak
-  menyentuh batas canvas.
+- Mengetik memakai empat fase tombol pada setiap empat tingkat merah wajah dan
+  mempertahankan state `type` selama input aktif, tanpa frame idle terselip.
+- Keyboard mengetik berdiri sebagai prop rendah tersendiri. Scroll memakai prop
+  berbeda: laptop tegak, scrollbar bergerak, mouse, dan satu paw aktif.
 - Empat behavior baru ikut scheduler kebutuhan/jam, tersedia di menu klik
   kanan, dan tetap dapat diinterupsi input, meeting, drag, atau agent.
 - Tujuh pembalikan dengan lintasan minimal 130 px dalam 2,4 detik memicu state
@@ -93,11 +92,11 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 101 unit test lulus, termasuk detektor gesture, false-positive jitter,
-  multi-monitor negatif, glance, kelengkapan 912 aset tema/arah, alpha PNG, dan
+- 103 unit test lulus, termasuk detektor gesture, false-positive jitter,
+  multi-monitor negatif, glance, kelengkapan 1056 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan
   uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.6.0`.
+- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.6.1`.
 
 final result: passed

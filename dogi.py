@@ -357,6 +357,9 @@ REST_CHOICES = (45, 60, 90)   # pilihan ambang menit nonstop
 
 # ---------------------------------------------- reaksi scroll & video meeting
 SCROLL_REACTION_SECONDS = 0.9
+TYPE_FRAMES_PER_HEAT = 4
+TYPE_HEAT_LEVELS = 4
+TYPE_HEAT_THRESHOLDS = (8.0, 20.0, 45.0)
 CURSOR_SWING_MIN_RUN = 130
 CURSOR_SWING_WINDOW_SECONDS = 2.4
 CURSOR_SWING_REVERSALS = 7
@@ -965,7 +968,7 @@ SPRITE_FRAME_COUNTS = {
     "dig": 4,
     "eat": 4,
     "hold": 4,
-    "type": 8,
+    "type": TYPE_FRAMES_PER_HEAT * TYPE_HEAT_LEVELS,
     "scroll_up": 4,
     "scroll_down": 4,
     "meeting_alert": 4,
@@ -1009,6 +1012,18 @@ def sprite_frame_index(state, tick):
     sequence = SPRITE_FRAME_SEQUENCES.get(state, tuple(range(count)))
     hold = SPRITE_FRAME_HOLD.get(state, 1)
     return sequence[(tick // hold) % len(sequence)]
+
+
+def typing_heat_level(elapsed_seconds):
+    """Tahap merah muka setelah mengetik terus-menerus."""
+    elapsed_seconds = max(0.0, float(elapsed_seconds))
+    return sum(elapsed_seconds >= threshold for threshold in TYPE_HEAT_THRESHOLDS)
+
+
+def typing_frame_index(tick, heat_level):
+    """Pilih siklus empat tombol di dalam kelompok tingkat merah wajah."""
+    heat_level = max(0, min(TYPE_HEAT_LEVELS - 1, int(heat_level)))
+    return heat_level * TYPE_FRAMES_PER_HEAT + tick % TYPE_FRAMES_PER_HEAT
 
 
 def sprite_is_mirrored(state, facing):
@@ -1181,6 +1196,8 @@ class DogiPet:
         self.gaze_until = 0.0
         self.cursor_reaction_until = 0.0
         self.chase_cooldown_until = 0.0
+        self.typing_started_at = None
+        self.typing_heat = 0
 
         self._drag_start = None
         self._moved = False
@@ -1357,6 +1374,8 @@ class DogiPet:
                 1 if self.gaze_y < head_y - 30
                 else (2 if horizontal >= 0 else 0)
             )
+        elif asset_state == "type":
+            frame_index = typing_frame_index(self.frame_i, self.typing_heat)
         else:
             frame_index = sprite_frame_index(asset_state, self.frame_i)
         mirrored = sprite_is_mirrored(self.state, self.visual_facing())
@@ -1419,6 +1438,13 @@ class DogiPet:
     # ---------------------------------------------------------------- logika
     def tick(self, now, cx, cy, typing, thinking, scrolling=0):
         previous_x = self.x
+        if typing:
+            if getattr(self, "typing_started_at", None) is None:
+                self.typing_started_at = now
+            self.typing_heat = typing_heat_level(now - self.typing_started_at)
+        elif now - getattr(self.app, "last_key_time", 0.0) > 2.0:
+            self.typing_started_at = None
+            self.typing_heat = 0
         # Drag punya prioritas tertinggi: jangan biarkan status agent, typing,
         # atau pergerakan otomatis menimpa pose Dogi yang sedang digendong.
         if self._drag_start and self._moved:

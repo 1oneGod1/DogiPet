@@ -49,10 +49,11 @@ sementara desktop pet tetap aktif.
   setelah beberapa menit sehingga Dogi tak pernah membeku selamanya.
 - Ekor runcing gaya shiba berkibas antar-frame pada semua aktivitas; pose tidur
   memakai ekor rebah memanjang dan tidak memakai bentuk gelung/donat.
-- Laptop mengetik digambar ulang pada grid logis agar layar dan keyboard base
-  selalu utuh di seluruh delapan frame.
-- Ikut mengetik di laptop mini saat kamu mengetik.
-- Ikut menggerakkan indikator laptop saat kamu scroll ke atas atau bawah.
+- Animasi mengetik memakai keyboard mandiri dengan tombol yang menyala dan dua
+  telapak bergantian; wajah Dogi memerah dalam empat tahap setelah 8, 20, dan
+  45 detik mengetik berkelanjutan.
+- Animasi scroll dibuat berbeda: Dogi memakai satu telapak pada mouse, sementara
+  isi layar dan scrollbar laptop bergerak mengikuti arah scroll.
 - Mengenali jendela Zoom, Teams, Google Meet, Webex, dan call lain; Dogi
   menghadap ke posisi meeting, menggonggong sekali, lalu sesekali mengawasi.
 - Mode presentasi (jangan ganggu): Dogi otomatis sembunyi saat ada aplikasi
