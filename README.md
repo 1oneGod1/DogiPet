@@ -78,6 +78,11 @@ sementara desktop pet tetap aktif.
 - OpenAI Responses API bersifat opsional dan hanya dipanggil ketika tombol
   Rapikan AI ditekan. Model default `gpt-5.6-luna`; API key dienkripsi memakai
   Windows DPAPI dan tidak ditulis ke repository atau `config.json`.
+- Halaman **Rekam Rapat** merekam mikrofon atau audio meeting dari speaker/
+  headset melalui WASAPI. Audio disimpan lokal sebagai WAV mono 16 kHz dan
+  otomatis dipotong per sembilan menit agar aman untuk transkripsi.
+- Tombol **Buat Notulen AI** mentranskrip audio dengan label pembicara, menyimpan
+  transkrip `.txt` lokal, lalu membuat notulen terstruktur di Catatan & Agenda.
 - Google Calendar read-only melalui OAuth desktop + PKCE. Agenda tujuh hari
   ditampilkan di Control Center, disinkronkan berkala, dan Dogi mengingatkan
   sekali saat agenda tinggal 10 menit.
@@ -114,6 +119,23 @@ DPAPI. Catatan biasa tetap berada di `~/.dogi/notes.json`, sehingga masih dapat
 dipakai tanpa akun AI atau internet. Implementasi memakai
 [OpenAI Responses API](https://developers.openai.com/api/docs/guides/text)
 dan menonaktifkan penyimpanan respons (`store: false`).
+
+## Rekam rapat dan buat notulen
+
+1. Buka **Control Center → Rekam Rapat**.
+2. Pilih **Audio meeting / speaker** untuk suara peserta dari Zoom/Meet/Teams,
+   atau **Mikrofon** untuk suara kamu dan ruangan.
+3. Pastikan semua peserta mengetahui dan menyetujui perekaman, lalu tekan
+   **Mulai Rekam**. Tekan **Hentikan Rekaman** saat selesai.
+4. Tekan **Buat Notulen AI**. Kamu juga dapat memakai **Pilih Audio** untuk
+   memproses rekaman yang sudah ada.
+
+Perekaman tidak pernah dimulai otomatis. WAV tetap berada di
+`~/.dogi/recordings/`; audio baru dikirim setelah tombol AI ditekan. Transkripsi
+memakai `gpt-4o-transcribe-diarize` agar pembicara dipisahkan, mengikuti
+[panduan Speech to text OpenAI](https://developers.openai.com/api/docs/guides/speech-to-text).
+Setiap potongan dijaga di bawah batas unggahan 25 MB. Notulen dibuat melalui
+Responses API dengan `store: false`, sedangkan transkrip lengkap disimpan lokal.
 
 ## Menghubungkan Google Calendar
 
@@ -194,16 +216,17 @@ python dogi_hook.py done
 Status ditulis secara lokal ke `~/.dogi/agent_status.json`. Dogi tidak
 mengirim isi prompt, ketikan, atau data penggunaan ke server mana pun.
 
-Deteksi meeting juga lokal dan konservatif: DogiPet hanya memeriksa nama app,
-judul jendela, serta posisinya. Kamera, mikrofon, peserta, dan isi meeting tidak
-pernah dibaca.
+Deteksi meeting otomatis tetap lokal dan konservatif: DogiPet hanya memeriksa
+nama app, judul jendela, serta posisinya. Audio hanya dibaca ketika pengguna
+secara eksplisit menekan **Mulai Rekam** pada halaman Rekam Rapat.
 
 ## Data lokal
 
-Konfigurasi, suara sintetis, status agent, catatan, dan installer sementara
+Konfigurasi, suara sintetis, status agent, catatan, rekaman rapat, dan installer sementara
 tersimpan di `~/.dogi/`. File `config.json` menyimpan preferensi non-rahasia,
 `notes.json` menyimpan isi catatan, dan `credentials.bin` menyimpan API key serta
-token OAuth yang telah dienkripsi Windows DPAPI.
+token OAuth yang telah dienkripsi Windows DPAPI. WAV serta transkrip berada di
+`~/.dogi/recordings/` dan dapat dibuka dari halaman Rekam Rapat.
 
 ## Pengembangan
 
@@ -211,7 +234,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py calendar_integration.py secure_store.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py calendar_integration.py secure_store.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>

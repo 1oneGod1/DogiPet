@@ -14,6 +14,7 @@ Fitur lengkap:
       dijalankan — tanpa file eksternal, tanpa library tambahan)
     - Pomodoro 25 menit + pengingat peregangan tiap 45 menit
     - Catatan lokal dengan tombol Rapikan AI yang bersifat opt-in
+    - Rekam audio rapat lokal lalu buat transkrip dan notulen AI
     - Google Calendar read-only dengan pengingat agenda melalui Dogi
     - Integrasi CLAUDE CODE: muka mikir "..." saat agent bekerja,
       semua Dogi lompat + menggonggong saat tugas selesai
@@ -50,6 +51,8 @@ from calendar_integration import (
     reminder_due,
 )
 import dogi_hook
+from meeting_ai import MeetingAIResult, process_meeting
+from meeting_recorder import MeetingRecorder, MeetingRecorderError, RecordingResult
 from notes_ai import DEFAULT_AI_MODEL, NotesStore, organize_note
 from secure_store import SecureStore, SecureStoreError
 import startup as startup_registry
@@ -141,6 +144,7 @@ CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
 NOTES_FILE = CONF_DIR / "notes.json"
 CREDENTIALS_FILE = CONF_DIR / "credentials.bin"
+RECORDINGS_DIR = CONF_DIR / "recordings"
 CALENDAR_SYNC_SECONDS = 300
 CALENDAR_RETRY_SECONDS = 60
 DEFAULT_CALENDAR_REMINDER_MIN = 10
@@ -1833,6 +1837,8 @@ class ControlCenter:
         self.pomodoro_var = tk.StringVar(value="SIAP UNTUK SESI FOKUS")
         self.theme_var = tk.StringVar(value=app.theme)
         self.note_status_var = tk.StringVar(value="CATATAN TERSIMPAN LOKAL")
+        self.meeting_record_status_var = tk.StringVar(value="SIAP MEREKAM")
+        self.meeting_record_timer_var = tk.StringVar(value="00:00:00")
         self._current_note_id = None
         self._note_ids = []
         self._loading_note = False
@@ -1847,6 +1853,7 @@ class ControlCenter:
         self._build_customize_page()
         self._build_focus_page()
         self._build_notes_page()
+        self._build_meeting_page()
         self._build_reactions_page()
         self._build_agent_page()
         self._build_updates_page()
@@ -1953,6 +1960,7 @@ class ControlCenter:
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
             ("NOTES", "CATATAN & AGENDA"),
+            ("MEETING", "REKAM RAPAT"),
             ("REACTIONS", "REAKSI"),
             ("AGENT", "AGENT AI"),
             ("UPDATES", "PEMBARUAN"),
@@ -2361,6 +2369,142 @@ class ControlCenter:
 
         self._refresh_notes(create_if_empty=True)
 
+    def _build_meeting_page(self):
+        page = self._new_page(
+            "MEETING",
+            "REKAM RAPAT. DOGI BUAT NOTULEN.",
+            "Audio tetap lokal sampai kamu menekan tombol Buat Notulen AI.",
+        )
+
+        consent = self._card(page)
+        consent.pack(fill="x", pady=(0, 10))
+        self._label(
+            consent,
+            "PRIVASI & PERSETUJUAN",
+            8,
+            "#e2574c",
+            bold=True,
+        ).pack(anchor="w", padx=16, pady=(12, 4))
+        self._label(
+            consent,
+            "Rekam hanya setelah semua peserta mengetahui dan menyetujui. "
+            "Dogi tidak pernah mulai merekam otomatis.",
+            8,
+            self.MUTED,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+
+        recorder_card = self._card(page)
+        recorder_card.pack(fill="x", pady=(0, 10))
+        recorder_body = tk.Frame(recorder_card, bg=self.PANEL)
+        recorder_body.pack(fill="x", padx=16, pady=14)
+
+        self._label(recorder_body, "SUMBER AUDIO", 8, self.MUTED, bold=True).pack(
+            anchor="w"
+        )
+        source_row = tk.Frame(recorder_body, bg=self.PANEL)
+        source_row.pack(fill="x", pady=(7, 12))
+        self.meeting_source_buttons = {}
+        for source, label in (
+            ("system", "AUDIO MEETING / SPEAKER"),
+            ("microphone", "MIKROFON"),
+        ):
+            button = self._button(
+                source_row,
+                label,
+                lambda value=source: self._select_meeting_source(value),
+                width=25,
+            )
+            button.pack(side="left", padx=(0, 8))
+            self.meeting_source_buttons[source] = button
+
+        status_row = tk.Frame(recorder_body, bg=self.PANEL_ALT)
+        status_row.pack(fill="x", pady=(0, 12))
+        status_copy = tk.Frame(status_row, bg=self.PANEL_ALT)
+        status_copy.pack(side="left", padx=14, pady=12)
+        self._label(
+            status_copy,
+            textvariable=self.meeting_record_status_var,
+            size=9,
+            color=self.TEXT,
+            bold=True,
+            bg=self.PANEL_ALT,
+        ).pack(anchor="w")
+        self._label(
+            status_copy,
+            textvariable=self.meeting_record_timer_var,
+            size=16,
+            color=self.ACCENT,
+            bold=True,
+            bg=self.PANEL_ALT,
+        ).pack(anchor="w", pady=(3, 0))
+        self.meeting_record_button = self._button(
+            status_row,
+            "MULAI REKAM",
+            self._toggle_meeting_recording,
+            accent=True,
+            width=18,
+        )
+        self.meeting_record_button.pack(side="right", padx=14)
+
+        self._label(
+            recorder_body,
+            "System audio merekam suara yang keluar dari speaker/headset. "
+            "Mikrofon merekam suara kamu dan ruangan.",
+            8,
+            self.MUTED,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w")
+
+        ai_card = self._card(page)
+        ai_card.pack(fill="both", expand=True)
+        ai_body = tk.Frame(ai_card, bg=self.PANEL)
+        ai_body.pack(fill="both", expand=True, padx=16, pady=14)
+        self._label(ai_body, "TRANSKRIP & NOTULEN AI", 8, self.MUTED, bold=True).pack(
+            anchor="w"
+        )
+        self.meeting_file_label = self._label(
+            ai_body,
+            "Belum ada rekaman dipilih.",
+            9,
+            self.TEXT,
+            wraplength=610,
+            justify="left",
+        )
+        self.meeting_file_label.pack(anchor="w", pady=(8, 12))
+
+        file_actions = tk.Frame(ai_body, bg=self.PANEL)
+        file_actions.pack(fill="x")
+        self._button(
+            file_actions, "PILIH AUDIO", self._select_meeting_audio, width=16,
+        ).pack(side="left", padx=(0, 6))
+        self._button(
+            file_actions, "BUKA FOLDER", self._open_recordings_folder, width=16,
+        ).pack(side="left", padx=(0, 6))
+        self._button(
+            file_actions, "ATUR AI", self._configure_ai, width=12,
+        ).pack(side="left")
+        self.meeting_ai_button = self._button(
+            file_actions,
+            "BUAT NOTULEN AI",
+            self._create_meeting_minutes,
+            accent=True,
+            width=19,
+        )
+        self.meeting_ai_button.pack(side="right")
+
+        self.meeting_ai_status_label = self._label(
+            ai_body,
+            "Model transkripsi memisahkan pembicara. Hasil notulen masuk ke Catatan & Agenda.",
+            8,
+            self.MUTED,
+            wraplength=620,
+            justify="left",
+        )
+        self.meeting_ai_status_label.pack(anchor="w", pady=(14, 0))
+
     def _build_agent_page(self):
         page = self._new_page(
             "AGENT",
@@ -2633,7 +2777,7 @@ class ControlCenter:
         self._label(
             card,
             "Anjing piksel yang mengikuti kursor, bereaksi saat kamu mengetik,\n"
-            "merapikan catatan, mengingatkan agenda, dan merayakan tugas AI.",
+            "merekam rapat, membuat notulen, dan mengingatkan agenda.",
             10,
             self.TEXT,
             justify="left",
@@ -2809,7 +2953,8 @@ class ControlCenter:
         configured = self.app.has_openai_key()
         prompt = (
             "Masukkan API key OpenAI baru. Key disimpan terenkripsi dengan "
-            "Windows DPAPI dan hanya dipakai saat tombol Rapikan AI ditekan."
+            "Windows DPAPI dan hanya dipakai saat tombol Rapikan AI atau "
+            "Buat Notulen AI ditekan."
         )
         if configured:
             prompt += "\n\nKosongkan untuk menghapus key yang tersimpan."
@@ -2929,6 +3074,113 @@ class ControlCenter:
         link = self.app.calendar_events[selection[0]].html_link
         if link:
             webbrowser.open(link)
+
+    # ---------------------------------------------------------- rekam rapat
+    def _select_meeting_source(self, source):
+        if self.app.meeting_recorder.recording:
+            return
+        self.app.meeting_record_source = (
+            "microphone" if source == "microphone" else "system"
+        )
+        self.app.save_config()
+        self.sync_from_app()
+
+    def _toggle_meeting_recording(self):
+        if self.app.meeting_recorder.recording:
+            self.app.stop_meeting_recording()
+            self.meeting_record_status_var.set("MENYELESAIKAN FILE AUDIO...")
+            return
+        if not messagebox.askyesno(
+            "Mulai rekam rapat",
+            "Pastikan semua peserta mengetahui dan menyetujui perekaman.\n\n"
+            "Mulai merekam sekarang?",
+            parent=self.win,
+        ):
+            return
+        try:
+            self.app.start_meeting_recording()
+        except MeetingRecorderError as exc:
+            messagebox.showerror("Rekam rapat", str(exc), parent=self.win)
+
+    def _select_meeting_audio(self):
+        selected = filedialog.askopenfilenames(
+            parent=self.win,
+            title="Pilih satu atau beberapa bagian audio rapat",
+            filetypes=(
+                ("Audio rapat", "*.wav *.mp3 *.mp4 *.mpeg *.mpga *.m4a *.webm"),
+                ("Semua file", "*.*"),
+            ),
+        )
+        if not selected:
+            return
+        self.app.meeting_audio_files = tuple(pathlib.Path(path) for path in selected)
+        self.app.meeting_status = f"{len(selected)} FILE AUDIO DIPILIH"
+        self.sync_from_app()
+
+    def _open_recordings_folder(self):
+        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(RECORDINGS_DIR))
+            else:
+                webbrowser.open(RECORDINGS_DIR.as_uri())
+        except OSError as exc:
+            messagebox.showerror("Folder rekaman", str(exc), parent=self.win)
+
+    def _create_meeting_minutes(self):
+        if self.app.meeting_recorder.recording:
+            messagebox.showinfo(
+                "Notulen rapat",
+                "Hentikan rekaman sebelum membuat transkrip.",
+                parent=self.win,
+            )
+            return
+        if not self.app.meeting_audio_files:
+            messagebox.showinfo(
+                "Notulen rapat",
+                "Rekam rapat atau pilih file audio lebih dulu.",
+                parent=self.win,
+            )
+            return
+        if not self.app.has_openai_key() and not self._configure_ai():
+            return
+        self.meeting_ai_button.configure(state="disabled")
+        self.meeting_ai_status_label.configure(
+            text="AI sedang mentranskrip, memisahkan pembicara, lalu menyusun notulen...",
+            fg=self.ACCENT,
+        )
+
+        def finished(result, error):
+            self.meeting_ai_button.configure(state="normal")
+            if error:
+                self.meeting_ai_status_label.configure(
+                    text="Gagal membuat notulen. Audio lokal tidak dihapus.",
+                    fg="#e2574c",
+                )
+                messagebox.showwarning("Notulen rapat", error, parent=self.win)
+                return
+            if not isinstance(result, MeetingAIResult):
+                return
+            body = (
+                f"{result.minutes}\n\n---\n"
+                f"Transkrip lengkap tersimpan lokal:\n`{result.transcript_path}`"
+            )
+            try:
+                note = self.app.note_store.create(result.title, body)
+                self._refresh_notes(select_id=note.id)
+            except Exception as exc:
+                messagebox.showerror("Simpan notulen", str(exc), parent=self.win)
+                return
+            self.meeting_ai_status_label.configure(
+                text="Notulen selesai dan tersimpan di Catatan & Agenda.",
+                fg=self.ACCENT,
+            )
+            self.show_page("NOTES")
+            if self.app.pets:
+                self.app.pets[0].set_state("happy")
+                self.app.pets[0].show_msg("Notulen rapat selesai!", 5)
+
+        self.app.process_meeting_async(self.app.meeting_audio_files, finished)
 
     def _pet_primary(self):
         if self.app.pets:
@@ -3081,6 +3333,35 @@ class ControlCenter:
         )
         self._refresh_calendar_events()
 
+        recording = self.app.meeting_recorder.recording
+        for source, button in self.meeting_source_buttons.items():
+            selected = source == self.app.meeting_record_source
+            button.configure(
+                state="disabled" if recording else "normal",
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+        self.meeting_record_button.configure(
+            text="HENTIKAN REKAMAN" if recording else "MULAI REKAM",
+            bg="#e2574c" if recording else self.ACCENT,
+            fg=self.TEXT if recording else self.DARK,
+        )
+        elapsed = int(self.app.meeting_recorder.elapsed_seconds)
+        self.meeting_record_timer_var.set(
+            f"{elapsed // 3600:02d}:{(elapsed % 3600) // 60:02d}:{elapsed % 60:02d}"
+        )
+        self.meeting_record_status_var.set(self.app.meeting_status)
+        files = self.app.meeting_audio_files
+        if files:
+            names = ", ".join(path.name for path in files[:3])
+            if len(files) > 3:
+                names += f" +{len(files) - 3} file"
+            self.meeting_file_label.configure(text=names)
+        else:
+            self.meeting_file_label.configure(text="Belum ada rekaman dipilih.")
+        can_process = bool(files) and not recording and not self.app.meeting_processing
+        self.meeting_ai_button.configure(state="normal" if can_process else "disabled")
+
         for key, bar in self.stat_bars.items():
             value = self.app.stats.get(key, 0)
             width = int(int(bar.cget("width")) * value / STAT_MAX)
@@ -3199,6 +3480,11 @@ class DogiApp:
         self.note_store = NotesStore(NOTES_FILE)
         self.secure_store = SecureStore(CREDENTIALS_FILE)
         self.calendar_integration = GoogleCalendarIntegration(self.secure_store)
+        self.meeting_recorder = MeetingRecorder(RECORDINGS_DIR)
+        self.meeting_record_source = "system"
+        self.meeting_audio_files = ()
+        self.meeting_processing = False
+        self.meeting_status = "SIAP MEREKAM"
         self.calendar_events = []
         self.calendar_connected = False
         self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
@@ -3295,6 +3581,8 @@ class DogiApp:
             self.meeting_reaction_on = bool(cfg.get("meeting_reaction", True))
             self.meeting_bark_on = bool(cfg.get("meeting_bark", True))
             self.presentation_hide_on = bool(cfg.get("presentation_hide", True))
+            if cfg.get("meeting_record_source") in ("system", "microphone"):
+                self.meeting_record_source = cfg["meeting_record_source"]
             model = str(cfg.get("ai_model") or DEFAULT_AI_MODEL).strip()
             self.ai_model = model[:80] or DEFAULT_AI_MODEL
             reminder = cfg.get(
@@ -3335,6 +3623,7 @@ class DogiApp:
                         "meeting_reaction": self.meeting_reaction_on,
                         "meeting_bark": self.meeting_bark_on,
                         "presentation_hide": self.presentation_hide_on,
+                        "meeting_record_source": self.meeting_record_source,
                         "ai_model": self.ai_model,
                         "calendar_reminder_min": self.calendar_reminder_min,
                         "stats": {k: round(v, 2) for k, v in self.stats.items()},
@@ -3445,6 +3734,76 @@ class DogiApp:
                 pass
 
         threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def start_meeting_recording(self):
+        if self.meeting_processing:
+            raise MeetingRecorderError("Tunggu proses notulen AI selesai.")
+        self.meeting_audio_files = ()
+        self.meeting_status = "MEMULAI PEREKAMAN..."
+        return self.meeting_recorder.start(self.meeting_record_source)
+
+    def stop_meeting_recording(self):
+        self.meeting_status = "MENYELESAIKAN FILE AUDIO..."
+        return self.meeting_recorder.stop()
+
+    def _poll_meeting_recorder(self):
+        changed = False
+        for event, payload in self.meeting_recorder.poll():
+            changed = True
+            if event == "started":
+                self.meeting_status = f"MEREKAM  /  {str(payload).upper()[:48]}"
+                if self.pets:
+                    self.pets[0].set_state("meeting_watch")
+                    self.pets[0].show_msg("REC rapat dimulai", 4)
+            elif event == "stopped" and isinstance(payload, RecordingResult):
+                self.meeting_audio_files = payload.files
+                minutes = int(payload.duration_seconds) // 60
+                seconds = int(payload.duration_seconds) % 60
+                self.meeting_status = f"REKAMAN SELESAI  /  {minutes:02d}:{seconds:02d}"
+                if self.pets:
+                    self.pets[0].set_state("happy")
+                    self.pets[0].show_msg("Rekaman tersimpan!", 4)
+            elif event == "error":
+                self.meeting_status = "PEREKAMAN GAGAL"
+                messagebox.showwarning("Rekam rapat", str(payload))
+        if changed and self.control_center:
+            self.control_center.sync_from_app()
+
+    def process_meeting_async(self, audio_files, callback):
+        if self.meeting_processing:
+            return False
+        try:
+            api_key = self.secure_store.get("openai_api_key", "")
+        except SecureStoreError as exc:
+            callback(None, str(exc))
+            return False
+        if not api_key:
+            callback(None, "API key OpenAI belum diatur.")
+            return False
+        files = tuple(pathlib.Path(path) for path in audio_files)
+        self.meeting_processing = True
+
+        def worker():
+            try:
+                result = process_meeting(
+                    files,
+                    api_key,
+                    output_dir=RECORDINGS_DIR / "transcripts",
+                    minutes_model=self.ai_model,
+                )
+                error = None
+            except Exception as exc:
+                result, error = None, str(exc)
+            self.meeting_processing = False
+            try:
+                self.root.after(0, lambda: callback(result, error))
+            except tk.TclError:
+                pass
+
+        threading.Thread(
+            target=worker, daemon=True, name="dogipet-meeting-ai"
+        ).start()
         return True
 
     def connect_google_calendar_async(self, credentials_path, callback=None):
@@ -4053,6 +4412,7 @@ class DogiApp:
 
         self._poll_agent_status()
         self._agent_watchdog(now)
+        self._poll_meeting_recorder()
         self._poll_update_events()
         self._update_stats(now)
         self._check_clock(now)
@@ -4099,6 +4459,7 @@ class DogiApp:
         self.root.after(TICK_MS, self._tick)
 
     def quit(self):
+        self.meeting_recorder.close()
         self.save_config()
         self.root.destroy()
 

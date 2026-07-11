@@ -1,4 +1,4 @@
-# Design QA — DogiPet 0.6.1
+# Design QA — DogiPet 0.7.0
 
 **Source visual truth**
 
@@ -92,11 +92,12 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 108 unit test lulus, termasuk detektor gesture, false-positive jitter,
+- 115 unit test lulus, termasuk perekam PCM, transkripsi/notulen rapat,
+  detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 1056 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan
   uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.6.1`.
+- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.7.0`.
 
 final result: passed
