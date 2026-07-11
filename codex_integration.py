@@ -248,8 +248,9 @@ def ask_with_codex(
             "konflik bila terlihat, dan fokus utama."
         ),
         "action_items": (
-            "Ekstrak action item menjadi checklist Markdown dengan kolom tugas, "
-            "PIC, tenggat, status, dan asal. Jangan membuat data yang tidak ada."
+            "Ekstrak action item. Setiap tugas wajib dimulai dengan '- [ ] ' agar "
+            "dapat diimpor DogiPet, lalu tulis PIC, tenggat, status, dan asal sebagai "
+            "sub-bullet. Jangan membuat data yang tidak ada."
         ),
         "follow_up": (
             "Buat draf follow-up rapat Bahasa Indonesia: subjek, ringkasan singkat, "

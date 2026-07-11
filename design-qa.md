@@ -92,7 +92,8 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 126 unit test lulus, termasuk konteks privat Tanya Dogi, jembatan Codex,
+- 137 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
+  plugin deklaratif, konteks privat Tanya Dogi, jembatan Codex,
   perekam PCM, transkripsi/notulen rapat,
   detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 1056 aset tema/arah, alpha PNG, dan

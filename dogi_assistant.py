@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-VALID_SOURCES = frozenset({"notes", "transcripts", "calendar"})
+VALID_SOURCES = frozenset({"notes", "tasks", "transcripts", "calendar", "memory"})
 MAX_CONTEXT_CHARS = 110_000
 MAX_NOTES = 30
 MAX_TRANSCRIPTS = 12
@@ -28,13 +28,16 @@ class AssistantContext:
     note_count: int
     transcript_count: int
     calendar_count: int
+    memory_count: int = 0
+    task_count: int = 0
     truncated: bool = False
 
     @property
     def source_summary(self) -> str:
         return (
             f"{self.note_count} catatan / {self.transcript_count} transkrip / "
-            f"{self.calendar_count} agenda"
+            f"{self.calendar_count} agenda / {self.memory_count} memori / "
+            f"{self.task_count} tugas"
         )
 
 
@@ -51,6 +54,8 @@ def build_assistant_context(
     note_store,
     transcript_dir: str | Path,
     calendar_events,
+    memory_store=None,
+    task_store=None,
     now: datetime | None = None,
 ) -> AssistantContext:
     selected = set(sources or ()) & VALID_SOURCES
@@ -62,7 +67,7 @@ def build_assistant_context(
         "# KONTEKS DOGIPET",
         f"Waktu lokal saat ini: {current.strftime('%A, %d %B %Y %H:%M %Z')}",
     ]
-    note_count = transcript_count = calendar_count = 0
+    note_count = transcript_count = calendar_count = memory_count = task_count = 0
 
     if "notes" in selected:
         notes = list(note_store.all())[:MAX_NOTES]
@@ -74,6 +79,17 @@ def build_assistant_context(
                 f"Diperbarui: {note.updated_at}\n{_limited(note.body)}"
             )
         sections.append("# CATATAN LOKAL\n" + ("\n\n".join(blocks) or "Tidak ada catatan."))
+
+    if "tasks" in selected:
+        tasks = list(task_store.all()) if task_store else []
+        blocks = [
+            f"- [{'x' if item.done else ' '}] {item.title} | prioritas={item.priority} "
+            f"| status={item.status} | deadline={item.due_at or 'tidak ada'} "
+            f"| detail={_limited(item.details, 1200)}"
+            for item in tasks
+        ]
+        task_count = len(blocks)
+        sections.append("# TUGAS LOKAL\n" + ("\n".join(blocks) or "Tidak ada tugas."))
 
     if "transcripts" in selected:
         folder = Path(transcript_dir)
@@ -110,6 +126,15 @@ def build_assistant_context(
         calendar_count = len(blocks)
         sections.append("# AGENDA KALENDER\n" + ("\n".join(blocks) or "Tidak ada agenda."))
 
+    if "memory" in selected:
+        memories = list(memory_store.all()) if memory_store else []
+        blocks = [
+            f"- {_limited(item.label, 160)}: {_limited(item.value, 1200)}"
+            for item in memories if item.enabled
+        ]
+        memory_count = len(blocks)
+        sections.append("# MEMORI YANG DIIZINKAN\n" + ("\n".join(blocks) or "Tidak ada memori aktif."))
+
     combined = "\n\n".join(sections)
     truncated = len(combined) > MAX_CONTEXT_CHARS
     if truncated:
@@ -121,5 +146,7 @@ def build_assistant_context(
         note_count,
         transcript_count,
         calendar_count,
+        memory_count,
+        task_count,
         truncated,
     )

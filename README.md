@@ -79,9 +79,29 @@ sementara desktop pet tetap aktif.
   OpenAI Responses API tetap tersedia sebagai fallback opsional. API key
   dienkripsi memakai Windows DPAPI dan tidak masuk repository atau `config.json`.
 - Halaman **Tanya Dogi** memberi izin sumber terpisah untuk Catatan, Transkrip,
-  dan Kalender. Pengguna dapat bertanya bebas, membuat brief hari ini, mencari
+  Tugas, Kalender, dan Memori. Pengguna dapat bertanya bebas, membuat brief hari ini, mencari
   action item, membuat draf follow-up, menyalin hasil, atau menyimpannya kembali
   sebagai catatan.
+- Halaman **Tugas & Inbox** menyimpan tugas, prioritas, detail, deadline, status,
+  pengingat 10 menit, fokus 25 menit, dan ekspor agenda `.ics` yang tetap harus
+  dikonfirmasi di aplikasi kalender.
+- **Quick Inbox** global (`Ctrl+Shift+D`) menangkap ide sebagai tugas/catatan;
+  `Ctrl+Shift+F` membuka pencarian semua data dan `Ctrl+Shift+V` menyalakan atau
+  menghentikan Voice Note lokal.
+- Voice Note memakai mikrofon hanya setelah hotkey/tombol ditekan, ditranskripsi
+  Whisper lokal, lalu disimpan sebagai catatan. Tidak ada perekaman otomatis.
+- Brief pagi/sore menghitung tugas serta agenda secara lokal tanpa mengirim data
+  ke AI. Brief detail melalui Codex tetap hanya berjalan setelah tombol ditekan.
+- Memori Dogi bersifat opt-in per item dan dapat dinonaktifkan/dihapus. Memori
+  baru masuk konteks Codex bila tombol sumber **Memori** aktif.
+- Pencarian lokal mencakup catatan, tugas, transkrip, agenda, dan memori tanpa AI.
+- Backup `.dogibak` portable memakai AES-GCM dan password; kredensial API/OAuth
+  serta audio mentah sengaja tidak ikut. Catatan, tugas, memori, konfigurasi,
+  transkrip teks, dan plugin dapat dipulihkan di komputer lain.
+- Progression non-hukuman memberi XP setelah tugas/sesi fokus selesai dan membuka
+  aksesori pixel bandana, bintang, serta mahkota.
+- Plugin deklaratif JSON dapat menambah pesan/reaksi untuk event aman tanpa
+  menjalankan Python, shell, ataupun kode pihak ketiga.
 - Halaman **Rekam Rapat** merekam mikrofon atau audio meeting dari speaker/
   headset melalui WASAPI. Audio disimpan lokal sebagai WAV mono 16 kHz dan
   otomatis dipotong per sembilan menit agar aman untuk transkripsi.
@@ -143,6 +163,29 @@ dikirim melalui `codex exec` dalam sandbox baca-saja dari folder kerja kosong.
 DogiPet tidak menyediakan aksi untuk mengubah kalender atau mengirim email;
 instruksi Codex juga secara eksplisit melarang membaca file dan menjalankan
 perintah untuk permintaan ini.
+
+## Tugas, Quick Inbox, Voice Note, dan Fokus
+
+- Buka **Control Center → Tugas & Inbox** untuk membuat dan mengelola tugas.
+- Format deadline: `YYYY-MM-DD HH:MM` dalam zona waktu Windows saat ini.
+- Tombol **Kalender** membuat file `.ics` lalu membuka aplikasi kalender; DogiPet
+  tidak menyimpan agenda tanpa konfirmasi pengguna.
+- Pilih tugas dan tekan **Fokus** untuk mengaitkannya dengan Pomodoro 25 menit.
+- Action item dari Tanya Dogi dapat diimpor lewat **Jadikan checklist sebagai
+  tugas**. Hanya baris Markdown `- [ ]` yang diambil dan maksimal 30 item.
+- `Ctrl+Shift+D`: Quick Inbox; `Ctrl+Shift+F`: pencarian; `Ctrl+Shift+V`: mulai/
+  hentikan Voice Note.
+
+## Data, backup, progression, dan plugin
+
+Halaman **Data & Memori** mengatur memori opt-in, brief otomatis, aksesori,
+backup, dan plugin. Password backup minimal delapan karakter dan tidak disimpan
+DogiPet. Kehilangan password berarti backup tidak dapat dipulihkan.
+
+Plugin berada di `~/.dogi/plugins/*.json`. Tekan **Buat Contoh** untuk manifest
+awal. Event yang didukung: `morning`, `evening`, `focus_done`, `task_done`, dan
+`fed`; state yang diizinkan terbatas pada animasi Dogi aman. Field lain dan event
+tidak dikenal diabaikan, sehingga plugin tidak pernah mengeksekusi kode.
 
 ## Rekam rapat dan buat notulen
 
@@ -272,7 +315,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py dogi_assistant.py calendar_integration.py secure_store.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py dogi_assistant.py productivity.py dogi_plugins.py calendar_integration.py secure_store.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>

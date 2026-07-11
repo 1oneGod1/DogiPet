@@ -6,6 +6,8 @@ import unittest
 
 from dogi_assistant import AssistantContextError, build_assistant_context
 from notes_ai import NotesStore
+from productivity import MemoryStore
+from productivity import TaskStore
 
 
 @dataclass
@@ -72,6 +74,33 @@ class AssistantContextTests(unittest.TestCase):
                     transcript_dir=Path(temp),
                     calendar_events=[],
                 )
+
+    def test_memory_is_only_added_when_selected_and_enabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            memories = MemoryStore(root / "memories.json")
+            enabled = memories.create("Preferensi", "Suka brief ringkas")
+            disabled = memories.create("Rahasia", "Jangan dibagikan")
+            memories.toggle(disabled.id)
+            context = build_assistant_context(
+                sources={"memory"}, note_store=NotesStore(root / "notes.json"),
+                transcript_dir=root, calendar_events=[], memory_store=memories,
+            )
+        self.assertIn(enabled.value, context.text)
+        self.assertNotIn(disabled.value, context.text)
+        self.assertEqual(context.memory_count, 1)
+
+    def test_tasks_are_an_explicit_context_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tasks = TaskStore(root / "tasks.json")
+            tasks.create("Kirim desain", priority="high")
+            context = build_assistant_context(
+                sources={"tasks"}, note_store=NotesStore(root / "notes.json"),
+                transcript_dir=root, calendar_events=[], task_store=tasks,
+            )
+        self.assertIn("Kirim desain", context.text)
+        self.assertEqual(context.task_count, 1)
 
 
 if __name__ == "__main__":

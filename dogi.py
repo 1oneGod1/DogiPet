@@ -14,6 +14,8 @@ Fitur lengkap:
       dijalankan — tanpa file eksternal, tanpa library tambahan)
     - Pomodoro 25 menit + pengingat peregangan tiap 45 menit
     - Catatan lokal dengan tombol Rapikan AI yang bersifat opt-in
+    - Tugas, Quick Inbox, pencarian global, voice note, memori, dan backup terenkripsi
+    - Tanya Dogi melalui akun Codex dengan izin sumber eksplisit
     - Rekam audio rapat lokal lalu buat transkrip dan notulen AI
     - Google Calendar read-only dengan pengingat agenda melalui Dogi
     - Integrasi CLAUDE CODE: muka mikir "..." saat agent bekerja,
@@ -63,7 +65,19 @@ import dogi_hook
 from meeting_ai import MeetingAIResult, process_meeting, process_meeting_local_codex
 from meeting_recorder import MeetingRecorder, MeetingRecorderError, RecordingResult
 from local_transcriber import DEFAULT_LOCAL_MODEL
+from local_transcriber import transcribe_audio_local
 from notes_ai import DEFAULT_AI_MODEL, NotesStore, organize_note
+from productivity import (
+    MemoryStore,
+    TaskStore,
+    accessory_unlocked,
+    export_encrypted_backup,
+    export_task_ics,
+    global_search,
+    import_encrypted_backup,
+    progression_level,
+)
+from dogi_plugins import PluginManager
 from secure_store import SecureStore, SecureStoreError
 import startup as startup_registry
 from build_info import BUILD_ID
@@ -153,9 +167,13 @@ CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
 STATUS_FILE = CONF_DIR / "agent_status.json"
 NOTES_FILE = CONF_DIR / "notes.json"
+TASKS_FILE = CONF_DIR / "tasks.json"
+MEMORIES_FILE = CONF_DIR / "memories.json"
 CREDENTIALS_FILE = CONF_DIR / "credentials.bin"
 RECORDINGS_DIR = CONF_DIR / "recordings"
 WHISPER_MODELS_DIR = CONF_DIR / "whisper-models"
+VOICE_DIR = RECORDINGS_DIR / "voice-notes"
+PLUGINS_DIR = CONF_DIR / "plugins"
 CALENDAR_SYNC_SECONDS = 300
 CALENDAR_RETRY_SECONDS = 60
 DEFAULT_CALENDAR_REMINDER_MIN = 10
@@ -1409,6 +1427,31 @@ class DogiPet:
         self._sprite_cache[key] = image
         return image
 
+    def _draw_accessory(self):
+        """Overlay aksesori sederhana pada grid 5 px agar tetap pixel-art."""
+        name = getattr(self.app, "accessory", "none")
+        if name == "none":
+            return
+        center = CANVAS_W // 2
+        if name == "bandana":
+            y = SPR_Y + 77
+            self.canvas.create_rectangle(center - 18, y, center + 18, y + 5, fill="#e2574c", outline="#e2574c")
+            side = 1 if self.visual_facing() > 0 else -1
+            x = center + side * 18
+            points = (x, y + 5, x + side * 15, y + 20, x - side * 2, y + 16)
+            self.canvas.create_polygon(points, fill="#e2574c", outline="#e2574c")
+        elif name == "star":
+            x, y = center + 42, SPR_Y + 12
+            color = "#f2cf45"
+            self.canvas.create_rectangle(x - 5, y, x + 5, y + 20, fill=color, outline=color)
+            self.canvas.create_rectangle(x - 10, y + 5, x + 10, y + 15, fill=color, outline=color)
+        elif name == "crown":
+            x, y = center, SPR_Y + 8
+            color = "#f2cf45"
+            self.canvas.create_rectangle(x - 22, y + 15, x + 22, y + 25, fill=color, outline=color)
+            for offset in (-20, 0, 20):
+                self.canvas.create_rectangle(x + offset - 5, y, x + offset + 5, y + 20, fill=color, outline=color)
+
     def draw(self, cx, cy):
         self.canvas.delete("all")
         pal = self.palette()
@@ -1437,6 +1480,7 @@ class DogiPet:
                             x0, y0, x0 + SCALE, y0 + SCALE,
                             fill=color, outline=color,
                         )
+        self._draw_accessory()
         text = self._bubble_text()
         if text:
             w = len(text) * 7 + 18
@@ -1857,6 +1901,8 @@ class ControlCenter:
         self._hook_state = (0.0, False)  # (kapan dicek, terpasang?)
         self._assistant_result = ""
         self._assistant_result_title = "Hasil Tanya Dogi"
+        self._task_ids = []
+        self._memory_ids = []
 
         self.pages = {}
         self.nav_buttons = {}
@@ -1865,9 +1911,11 @@ class ControlCenter:
         self._build_home_page()
         self._build_customize_page()
         self._build_focus_page()
+        self._build_tasks_page()
         self._build_notes_page()
         self._build_assistant_page()
         self._build_meeting_page()
+        self._build_data_page()
         self._build_reactions_page()
         self._build_agent_page()
         self._build_updates_page()
@@ -1898,6 +1946,8 @@ class ControlCenter:
         bg = self.ACCENT if accent else self.PANEL_ALT
         fg = self.DARK if accent else self.TEXT
         active_bg = "#ffe474" if accent else "#2b2b2b"
+        padx = kwargs.pop("padx", 12)
+        pady = kwargs.pop("pady", 10)
         return tk.Button(
             parent,
             text=text,
@@ -1911,8 +1961,8 @@ class ControlCenter:
             bd=0,
             cursor="hand2",
             font=("Consolas", 10, "bold"),
-            padx=12,
-            pady=10,
+            padx=padx,
+            pady=pady,
             **kwargs,
         )
 
@@ -1973,9 +2023,11 @@ class ControlCenter:
             ("HOME", "BERANDA"),
             ("CUSTOMIZE", "TAMPILAN"),
             ("FOCUS", "FOKUS"),
+            ("TASKS", "TUGAS & INBOX"),
             ("NOTES", "CATATAN & AGENDA"),
             ("ASSISTANT", "TANYA DOGI"),
             ("MEETING", "REKAM RAPAT"),
+            ("DATA", "DATA & MEMORI"),
             ("REACTIONS", "REAKSI"),
             ("AGENT", "AGENT AI"),
             ("UPDATES", "PEMBARUAN"),
@@ -1987,8 +2039,9 @@ class ControlCenter:
                 lambda name=page: self.show_page(name),
                 width=20,
                 anchor="w",
+                pady=6,
             )
-            button.pack(fill="x", pady=3)
+            button.pack(fill="x", pady=2)
             self.nav_buttons[page] = button
 
         self._label(
@@ -2254,6 +2307,158 @@ class ControlCenter:
             button.pack(side="right", padx=3)
             self.rest_limit_buttons[minutes] = button
 
+    def _build_tasks_page(self):
+        page = self._new_page(
+            "TASKS",
+            "TUGAS JELAS. DOGI JAGA DEADLINE.",
+            "Quick Inbox Ctrl+Shift+D / pencarian Ctrl+Shift+F / voice Ctrl+Shift+V.",
+        )
+
+        header = self._card(page)
+        header.pack(fill="x", pady=(0, 10))
+        header_row = tk.Frame(header, bg=self.PANEL)
+        header_row.pack(fill="x", padx=14, pady=12)
+        self.task_summary_label = self._label(
+            header_row, "BELUM ADA TUGAS", 10, self.TEXT, bold=True
+        )
+        self.task_summary_label.pack(side="left")
+        self.voice_note_button = self._button(
+            header_row, "VOICE NOTE", self.app.toggle_voice_note, width=14
+        )
+        self.voice_note_button.pack(side="right", padx=(6, 0))
+        self._button(
+            header_row, "QUICK INBOX", self.app.show_quick_inbox, width=15
+        ).pack(side="right", padx=(6, 0))
+        self._button(
+            header_row, "CARI SEMUA", self.app.show_global_search, width=14
+        ).pack(side="right")
+
+        body = self._card(page)
+        body.pack(fill="both", expand=True)
+        inner = tk.Frame(body, bg=self.PANEL)
+        inner.pack(fill="both", expand=True, padx=14, pady=14)
+        left = tk.Frame(inner, bg=self.PANEL, width=300)
+        left.pack(side="left", fill="both", padx=(0, 12))
+        left.pack_propagate(False)
+        self._label(left, "DAFTAR TUGAS", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.task_list = tk.Listbox(
+            left, bg=self.PANEL_ALT, fg=self.TEXT,
+            selectbackground=self.ACCENT, selectforeground=self.DARK,
+            relief="flat", bd=0, highlightthickness=0,
+            font=("Consolas", 8), exportselection=False,
+        )
+        self.task_list.pack(fill="both", expand=True, pady=(6, 8))
+        self.task_list.bind("<<ListboxSelect>>", self._on_task_select)
+        list_actions = tk.Frame(left, bg=self.PANEL)
+        list_actions.pack(fill="x")
+        self._button(list_actions, "SELESAI", self._toggle_task_done, width=10).pack(side="left")
+        self._button(list_actions, "HAPUS", self._delete_task, width=9).pack(side="right")
+
+        editor = tk.Frame(inner, bg=self.PANEL)
+        editor.pack(side="left", fill="both", expand=True)
+        self._label(editor, "JUDUL TUGAS", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.task_title = tk.Entry(
+            editor, bg=self.PANEL_ALT, fg=self.TEXT, insertbackground=self.TEXT,
+            relief="flat", font=("Consolas", 10, "bold")
+        )
+        self.task_title.pack(fill="x", ipady=6, pady=(4, 8))
+        self._label(editor, "DETAIL", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.task_details = tk.Text(
+            editor, height=6, wrap="word", bg=self.PANEL_ALT, fg=self.TEXT,
+            insertbackground=self.TEXT, selectbackground="#635a2a", relief="flat",
+            padx=8, pady=7, font=("Consolas", 8),
+        )
+        self.task_details.pack(fill="x", pady=(4, 8))
+        due_row = tk.Frame(editor, bg=self.PANEL)
+        due_row.pack(fill="x")
+        self._label(due_row, "DEADLINE", 8, self.MUTED, bold=True).pack(side="left")
+        self.task_due = tk.Entry(
+            due_row, bg=self.PANEL_ALT, fg=self.TEXT, insertbackground=self.TEXT,
+            relief="flat", font=("Consolas", 9), width=19,
+        )
+        self.task_due.pack(side="right", ipady=5)
+        self.task_due.insert(0, "YYYY-MM-DD HH:MM")
+        priority_row = tk.Frame(editor, bg=self.PANEL)
+        priority_row.pack(fill="x", pady=(9, 7))
+        self._label(priority_row, "PRIORITAS", 8, self.MUTED, bold=True).pack(side="left")
+        self.task_priority = "normal"
+        self.task_priority_buttons = {}
+        for value, label in (("low", "RENDAH"), ("normal", "NORMAL"), ("high", "TINGGI")):
+            button = self._button(
+                priority_row, label, lambda item=value: self._select_task_priority(item), width=8
+            )
+            button.pack(side="right", padx=(4, 0))
+            self.task_priority_buttons[value] = button
+        actions = tk.Frame(editor, bg=self.PANEL)
+        actions.pack(fill="x", pady=(6, 0))
+        for label, command, accent in (
+            ("BARU", self._create_task, True),
+            ("SIMPAN", self._update_task, False),
+            ("FOKUS", self._focus_selected_task, False),
+            ("KALENDER", self._task_to_calendar, False),
+        ):
+            self._button(actions, label, command, accent=accent, width=8).pack(
+                side="left", fill="x", expand=True, padx=(0, 4)
+            )
+        self.task_status_label = self._label(
+            editor, "TUGAS TERSIMPAN LOKAL", 7, self.MUTED, wraplength=320, justify="left"
+        )
+        self.task_status_label.pack(anchor="w", pady=(8, 0))
+        self._refresh_tasks()
+
+    def _build_data_page(self):
+        page = self._new_page(
+            "DATA",
+            "DATA MILIKMU. DOGI HANYA MENJAGA.",
+            "Memori opt-in, backup portable terenkripsi, progression, dan plugin aman.",
+        )
+        memory_card = self._card(page, height=275)
+        memory_card.pack(fill="x", pady=(0, 10)); memory_card.pack_propagate(False)
+        mem = tk.Frame(memory_card, bg=self.PANEL); mem.pack(fill="both", expand=True, padx=14, pady=14)
+        left = tk.Frame(mem, bg=self.PANEL, width=300); left.pack(side="left", fill="both", padx=(0, 12)); left.pack_propagate(False)
+        self._label(left, "MEMORI YANG DISETUJUI", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.memory_list = tk.Listbox(
+            left, bg=self.PANEL_ALT, fg=self.TEXT, selectbackground=self.ACCENT,
+            selectforeground=self.DARK, relief="flat", bd=0, highlightthickness=0,
+            font=("Consolas", 8), exportselection=False,
+        )
+        self.memory_list.pack(fill="both", expand=True, pady=(6, 8))
+        mem_actions = tk.Frame(left, bg=self.PANEL); mem_actions.pack(fill="x")
+        self._button(mem_actions, "ON/OFF", self._toggle_memory, width=9).pack(side="left")
+        self._button(mem_actions, "HAPUS", self._delete_memory, width=9).pack(side="right")
+        right = tk.Frame(mem, bg=self.PANEL); right.pack(side="left", fill="both", expand=True)
+        self._label(right, "NAMA MEMORI", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.memory_label_entry = tk.Entry(right, bg=self.PANEL_ALT, fg=self.TEXT, insertbackground=self.TEXT, relief="flat", font=("Consolas", 9))
+        self.memory_label_entry.pack(fill="x", ipady=5, pady=(4, 8))
+        self._label(right, "ISI", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.memory_value_entry = tk.Text(right, height=5, wrap="word", bg=self.PANEL_ALT, fg=self.TEXT, insertbackground=self.TEXT, relief="flat", padx=8, pady=6, font=("Consolas", 8))
+        self.memory_value_entry.pack(fill="x", pady=(4, 8))
+        self._button(right, "TAMBAH MEMORI", self._add_memory, accent=True, width=18).pack(anchor="e")
+
+        progress_card = self._card(page)
+        progress_card.pack(fill="x", pady=(0, 10))
+        progress = tk.Frame(progress_card, bg=self.PANEL); progress.pack(fill="x", padx=14, pady=12)
+        self.progress_label = self._label(progress, "LEVEL 1", 11, self.TEXT, bold=True); self.progress_label.pack(side="left")
+        self.accessory_buttons = {}
+        for name, label in (("none", "TANPA"), ("bandana", "BANDANA"), ("star", "BINTANG"), ("crown", "MAHKOTA")):
+            button=self._button(progress,label,lambda item=name:self.app.select_accessory(item),width=9)
+            button.pack(side="right", padx=(4,0)); self.accessory_buttons[name]=button
+
+        tools_card = self._card(page); tools_card.pack(fill="both", expand=True)
+        tools = tk.Frame(tools_card, bg=self.PANEL); tools.pack(fill="both", expand=True, padx=14, pady=14)
+        self._label(tools, "BACKUP & PLUGIN", 8, self.MUTED, bold=True).pack(anchor="w")
+        row1=tk.Frame(tools,bg=self.PANEL); row1.pack(fill="x",pady=(8,5))
+        self._button(row1,"EXPORT BACKUP",self._export_backup,width=17).pack(side="left")
+        self._button(row1,"PULIHKAN",self._import_backup,width=13).pack(side="left",padx=6)
+        self.brief_button=self._button(row1,"BRIEF OTOMATIS",self.app.toggle_daily_brief,width=17); self.brief_button.pack(side="right")
+        row2=tk.Frame(tools,bg=self.PANEL); row2.pack(fill="x",pady=5)
+        self._button(row2,"BUKA PLUGIN",self.app.open_plugins_folder,width=15).pack(side="left")
+        self._button(row2,"BUAT CONTOH",self.app.create_plugin_template,width=15).pack(side="left",padx=6)
+        self._button(row2,"MUAT ULANG",self.app.reload_plugins,width=15).pack(side="right")
+        self.data_status_label=self._label(tools,"",7,self.MUTED,wraplength=620,justify="left")
+        self.data_status_label.pack(anchor="w",pady=(7,0))
+        self._refresh_memories()
+
     def _build_notes_page(self):
         page = self._new_page(
             "NOTES",
@@ -2408,19 +2613,21 @@ class ControlCenter:
         self.assistant_source_buttons = {}
         for source, label in (
             ("notes", "CATATAN"),
-            ("transcripts", "TRANSKRIP"),
+            ("tasks", "TUGAS"),
+            ("transcripts", "RAPAT"),
             ("calendar", "KALENDER"),
+            ("memory", "MEMORI"),
         ):
             button = self._button(
                 source_row,
                 label,
                 lambda value=source: self._toggle_assistant_source(value),
-                width=13,
+                width=8,
             )
             button.pack(side="left", padx=(0, 6))
             self.assistant_source_buttons[source] = button
         self.assistant_codex_button = self._button(
-            source_row, "HUBUNGKAN CODEX", self._connect_codex, width=19
+            source_row, "HUBUNGKAN", self._connect_codex, width=14
         )
         self.assistant_codex_button.pack(side="right")
         self._label(
@@ -2496,7 +2703,7 @@ class ControlCenter:
         )
         self.assistant_result = tk.Text(
             result_body,
-            height=15,
+            height=12,
             wrap="word",
             bg=self.PANEL_ALT,
             fg=self.TEXT,
@@ -2509,6 +2716,11 @@ class ControlCenter:
             state="disabled",
         )
         self.assistant_result.pack(fill="both", expand=True)
+        self.assistant_task_button = self._button(
+            result_body, "JADIKAN CHECKLIST SEBAGAI TUGAS",
+            self._assistant_result_to_tasks, width=29,
+        )
+        self.assistant_task_button.pack(fill="x", pady=(8, 0))
         result_actions = tk.Frame(result_body, bg=self.PANEL)
         result_actions.pack(fill="x", pady=(8, 0))
         self.assistant_copy_button = self._button(
@@ -3125,6 +3337,140 @@ class ControlCenter:
         except Exception as exc:
             messagebox.showerror("Catatan DogiPet", str(exc), parent=self.win)
 
+    # ------------------------------------------------------- tugas & quick inbox
+    def _refresh_tasks(self, select_id=None):
+        try: tasks = self.app.task_store.all()
+        except Exception as exc:
+            messagebox.showerror("Tugas Dogi", str(exc), parent=self.win); return
+        self.task_list.delete(0, "end"); self._task_ids=[item.id for item in tasks]
+        for item in tasks: self.task_list.insert("end", item.display())
+        if select_id in self._task_ids:
+            index=self._task_ids.index(select_id); self.task_list.selection_set(index); self.task_list.see(index)
+        pending=sum(not item.done for item in tasks)
+        self.task_summary_label.configure(text=f"{pending} BELUM SELESAI  /  {len(tasks)-pending} SELESAI")
+
+    def _selected_task(self):
+        selected=self.task_list.curselection()
+        if not selected or selected[0]>=len(self._task_ids): return None
+        return self.app.task_store.get(self._task_ids[selected[0]])
+
+    def _on_task_select(self, _event=None):
+        item=self._selected_task()
+        if not item: return
+        self.task_title.delete(0,"end"); self.task_title.insert(0,item.title)
+        self.task_details.delete("1.0","end"); self.task_details.insert("1.0",item.details)
+        self.task_due.delete(0,"end")
+        if item.due_at:
+            try: value=datetime.fromisoformat(item.due_at).astimezone().strftime("%Y-%m-%d %H:%M")
+            except ValueError: value=item.due_at
+            self.task_due.insert(0,value)
+        else: self.task_due.insert(0,"YYYY-MM-DD HH:MM")
+        self._select_task_priority(item.priority)
+
+    def _select_task_priority(self, value):
+        self.task_priority=value if value in self.task_priority_buttons else "normal"
+        for key,button in self.task_priority_buttons.items():
+            selected=key==self.task_priority
+            button.configure(bg=self.ACCENT if selected else self.PANEL_ALT,fg=self.DARK if selected else self.TEXT)
+
+    def _task_due_value(self):
+        raw=self.task_due.get().strip()
+        if not raw or raw.upper().startswith("YYYY"): return ""
+        try:
+            parsed=datetime.strptime(raw,"%Y-%m-%d %H:%M").replace(tzinfo=datetime.now().astimezone().tzinfo)
+            return parsed.isoformat()
+        except ValueError as exc: raise ValueError("Deadline harus berformat YYYY-MM-DD HH:MM.") from exc
+
+    def _create_task(self):
+        try:
+            item=self.app.task_store.create(self.task_title.get(),self.task_details.get("1.0","end-1c"),priority=self.task_priority,due_at=self._task_due_value())
+            self._refresh_tasks(select_id=item.id); self.app.task_status="TUGAS BARU TERSIMPAN LOKAL"
+        except Exception as exc: messagebox.showwarning("Tambah tugas",str(exc),parent=self.win)
+
+    def _update_task(self):
+        item=self._selected_task()
+        if not item: return
+        try:
+            changed=self.app.task_store.update(item.id,title=self.task_title.get(),details=self.task_details.get("1.0","end-1c"),priority=self.task_priority,due_at=self._task_due_value())
+            self._refresh_tasks(select_id=changed.id); self.app.task_status="TUGAS DIPERBARUI"
+        except Exception as exc: messagebox.showwarning("Perbarui tugas",str(exc),parent=self.win)
+
+    def _toggle_task_done(self):
+        item=self._selected_task()
+        if not item: return
+        try:
+            changed,newly_done=self.app.task_store.toggle_done(item.id)
+            if newly_done: self.app.on_task_completed(changed)
+            self._refresh_tasks(select_id=changed.id)
+        except Exception as exc: messagebox.showwarning("Tugas Dogi",str(exc),parent=self.win)
+
+    def _delete_task(self):
+        item=self._selected_task()
+        if not item or not messagebox.askyesno("Hapus tugas",f"Hapus '{item.title}'?",parent=self.win): return
+        self.app.task_store.delete(item.id); self._refresh_tasks()
+
+    def _focus_selected_task(self):
+        item=self._selected_task()
+        if not item: messagebox.showinfo("Fokus tugas","Pilih tugas terlebih dahulu.",parent=self.win); return
+        self.app.start_focus_for_task(item.id); self.show_page("FOCUS")
+
+    def _task_to_calendar(self):
+        item=self._selected_task()
+        if not item:return
+        if not messagebox.askyesno("Buka di Kalender", "Buat file agenda dari deadline tugas dan buka aplikasi kalender? Kamu tetap mengonfirmasi penyimpanannya di aplikasi kalender.", parent=self.win):return
+        try:
+            path=export_task_ics(item,CONF_DIR/"task-to-calendar.ics");os.startfile(str(path))
+            self.app.task_status="AGENDA DIBUKA  /  KONFIRMASI DI APLIKASI KALENDER"
+        except Exception as exc:messagebox.showwarning("Buka di Kalender",str(exc),parent=self.win)
+
+    # ------------------------------------------------------------- data/memori
+    def _refresh_memories(self):
+        try: items=self.app.memory_store.all()
+        except Exception as exc: messagebox.showerror("Memori Dogi",str(exc),parent=self.win); return
+        self.memory_list.delete(0,"end"); self._memory_ids=[item.id for item in items]
+        for item in items: self.memory_list.insert("end",f"{'●' if item.enabled else '○'} {item.label}: {item.value[:70]}")
+
+    def _add_memory(self):
+        try:
+            self.app.memory_store.create(self.memory_label_entry.get(),self.memory_value_entry.get("1.0","end-1c"))
+            self.memory_label_entry.delete(0,"end"); self.memory_value_entry.delete("1.0","end"); self._refresh_memories()
+            self.app.data_status="MEMORI TERSIMPAN LOKAL  /  BELUM DIKIRIM KE AI"
+        except Exception as exc: messagebox.showwarning("Tambah memori",str(exc),parent=self.win)
+
+    def _selected_memory_id(self):
+        selected=self.memory_list.curselection()
+        return self._memory_ids[selected[0]] if selected and selected[0]<len(self._memory_ids) else None
+
+    def _toggle_memory(self):
+        memory_id=self._selected_memory_id()
+        if memory_id: self.app.memory_store.toggle(memory_id); self._refresh_memories()
+
+    def _delete_memory(self):
+        memory_id=self._selected_memory_id()
+        if memory_id and messagebox.askyesno("Hapus memori","Hapus memori yang dipilih?",parent=self.win):
+            self.app.memory_store.delete(memory_id); self._refresh_memories()
+
+    def _export_backup(self):
+        path=filedialog.asksaveasfilename(parent=self.win,title="Simpan backup DogiPet",defaultextension=".dogibak",filetypes=(("Backup DogiPet","*.dogibak"),))
+        if not path:return
+        password=simpledialog.askstring("Password backup","Masukkan password minimal 8 karakter. Password diperlukan saat restore di komputer lain.",parent=self.win,show="*")
+        if password is None:return
+        confirm=simpledialog.askstring("Ulangi password","Masukkan password backup sekali lagi.",parent=self.win,show="*")
+        if confirm != password:
+            messagebox.showwarning("Export backup","Password tidak sama.",parent=self.win);return
+        try:self.app.export_backup(path,password); self.app.data_status=f"BACKUP TERSIMPAN  /  {pathlib.Path(path).name}"
+        except Exception as exc:messagebox.showerror("Export backup",str(exc),parent=self.win)
+
+    def _import_backup(self):
+        path=filedialog.askopenfilename(parent=self.win,title="Pilih backup DogiPet",filetypes=(("Backup DogiPet","*.dogibak"),))
+        if not path:return
+        password=simpledialog.askstring("Password backup","Masukkan password backup.",parent=self.win,show="*")
+        if password is None:return
+        if not messagebox.askyesno("Pulihkan backup","Catatan, tugas, memori, konfigurasi, transkrip teks, dan plugin lokal akan diganti. Lanjutkan?",parent=self.win):return
+        try:
+            self.app.import_backup(path,password); self._refresh_notes(); self._refresh_tasks(); self._refresh_memories(); self.app.data_status="BACKUP DIPULIHKAN  /  RESTART DOGIPET DISARANKAN"
+        except Exception as exc:messagebox.showerror("Pulihkan backup",str(exc),parent=self.win)
+
     def _delete_note(self):
         if not self._current_note_id:
             return
@@ -3308,6 +3654,39 @@ class ControlCenter:
         self.sync_from_app()
         if self.app.pets:
             self.app.pets[0].show_msg("Jawabannya kusimpan!", 3)
+
+    def _assistant_result_to_tasks(self):
+        if not self._assistant_result:
+            return
+        candidates = []
+        for line in self._assistant_result.splitlines():
+            text = line.strip()
+            if text.startswith("- [ ]") or text.startswith("* [ ]"):
+                title = text[5:].strip().strip("|")
+                if title:
+                    candidates.append(title)
+        if not candidates:
+            messagebox.showinfo(
+                "Jadikan tugas",
+                "Jawaban belum memiliki checklist '- [ ]'. Gunakan aksi CARI ACTION ITEM terlebih dahulu.",
+                parent=self.win,
+            )
+            return
+        if not messagebox.askyesno(
+            "Jadikan tugas", f"Tambahkan {len(candidates)} item ke Tugas & Inbox?",
+            parent=self.win,
+        ):
+            return
+        created = []
+        for title in candidates[:30]:
+            try:
+                created.append(self.app.task_store.create(title, source="tanya-dogi"))
+            except ValueError:
+                continue
+        self._refresh_tasks(select_id=created[-1].id if created else None)
+        self.app.task_status = f"{len(created)} TUGAS DARI CODEX DITAMBAHKAN"
+        self.app.assistant_status = f"{len(created)} TUGAS DITAMBAHKAN  /  MENUNGGU KONFIRMASI DEADLINE"
+        self.sync_from_app()
 
     def _connect_google_calendar(self):
         try:
@@ -3799,6 +4178,36 @@ class ControlCenter:
         has_result = bool(self._assistant_result) and not self.app.assistant_processing
         self.assistant_copy_button.configure(state="normal" if has_result else "disabled")
         self.assistant_save_button.configure(state="normal" if has_result else "disabled")
+        self.assistant_task_button.configure(state="normal" if has_result else "disabled")
+
+        # Produktivitas, progression, voice note, dan plugin.
+        self.voice_note_button.configure(
+            text="STOP VOICE" if self.app.voice_recorder.recording else "VOICE NOTE",
+            state="disabled" if self.app.voice_processing else "normal",
+            bg="#e2574c" if self.app.voice_recorder.recording else self.PANEL_ALT,
+        )
+        task_status = self.app.task_status
+        if self.app.voice_status != "VOICE NOTE SIAP":
+            task_status += "  /  " + self.app.voice_status
+        self.task_status_label.configure(text=task_status)
+        level = progression_level(self.app.xp)
+        self.progress_label.configure(text=f"LEVEL {level}  /  {self.app.xp} XP")
+        for name, button in self.accessory_buttons.items():
+            unlocked = accessory_unlocked(name, self.app.xp)
+            selected = name == self.app.accessory
+            button.configure(
+                state="normal" if unlocked else "disabled",
+                bg=self.ACCENT if selected else self.PANEL_ALT,
+                fg=self.DARK if selected else self.TEXT,
+            )
+        self.brief_button.configure(
+            text="BRIEF ON" if self.app.daily_brief_on else "BRIEF OFF",
+            bg=self.ACCENT if self.app.daily_brief_on else self.PANEL_ALT,
+            fg=self.DARK if self.app.daily_brief_on else self.TEXT,
+        )
+        self.data_status_label.configure(
+            text=f"{self.app.data_status}  /  {len(self.app.plugin_manager.plugins)} PLUGIN AKTIF"
+        )
 
         for key, bar in self.stat_bars.items():
             value = self.app.stats.get(key, 0)
@@ -3829,7 +4238,9 @@ class ControlCenter:
         try:
             if self.app.pomo_end:
                 remaining = max(0, int(self.app.pomo_end - time.time()))
-                self.pomodoro_var.set(f"TERSISA {remaining // 60:02d}:{remaining % 60:02d}")
+                task = self.app.task_store.get(self.app.focus_task_id) if self.app.focus_task_id else None
+                suffix = f"  /  {task.title[:34].upper()}" if task else ""
+                self.pomodoro_var.set(f"TERSISA {remaining // 60:02d}:{remaining % 60:02d}{suffix}")
                 self.pomo_button.configure(text="BATALKAN TIMER", bg=self.PANEL_ALT, fg=self.TEXT)
             else:
                 self.pomodoro_var.set("SIAP UNTUK SESI FOKUS")
@@ -3878,6 +4289,7 @@ class DogiApp:
 
         # fitur bersama
         self.pomo_end = None
+        self.focus_task_id = ""
         self.stretch_on = True
         self.last_stretch = time.time()
         self.agent_thinking = False
@@ -3916,9 +4328,15 @@ class DogiApp:
         # DPAPI terpisah, tidak pernah masuk config.json atau notes.json.
         self.ai_model = DEFAULT_AI_MODEL
         self.note_store = NotesStore(NOTES_FILE)
+        self.task_store = TaskStore(TASKS_FILE)
+        self.memory_store = MemoryStore(MEMORIES_FILE)
         self.secure_store = SecureStore(CREDENTIALS_FILE)
         self.calendar_integration = GoogleCalendarIntegration(self.secure_store)
         self.meeting_recorder = MeetingRecorder(RECORDINGS_DIR)
+        self.voice_recorder = MeetingRecorder(VOICE_DIR)
+        self.voice_processing = False
+        self.voice_status = "VOICE NOTE SIAP"
+        self.task_status = "TUGAS TERSIMPAN LOKAL"
         self.meeting_record_source = "system"
         self.meeting_ai_mode = "local_codex"
         self.local_whisper_model = DEFAULT_LOCAL_MODEL
@@ -3933,6 +4351,18 @@ class DogiApp:
         self.assistant_sources = {"notes"}
         self.assistant_processing = False
         self.assistant_status = "SIAP  /  BELUM ADA DATA DIKIRIM"
+        self.daily_brief_on = True
+        self.last_morning_brief_date = ""
+        self.last_evening_brief_date = ""
+        self.xp = 0
+        self.accessory = "none"
+        self.data_status = "DATA LOKAL  /  BACKUP BELUM DIBUAT"
+        self._task_poll_at = 0.0
+        self._task_reminded = set()
+        self.plugin_manager = PluginManager(PLUGINS_DIR)
+        self.plugin_manager.reload()
+        self.quick_inbox_window = None
+        self.search_window = None
         self.calendar_events = []
         self.calendar_connected = False
         self.calendar_status = "GOOGLE CALENDAR BELUM TERHUBUNG"
@@ -3987,6 +4417,13 @@ class DogiApp:
             listener = _pynput_keyboard.Listener(on_press=self._on_key)
             listener.daemon = True
             listener.start()
+            self._hotkey_listener = _pynput_keyboard.GlobalHotKeys({
+                "<ctrl>+<shift>+d": lambda: self.root.after(0, self.show_quick_inbox),
+                "<ctrl>+<shift>+f": lambda: self.root.after(0, self.show_global_search),
+                "<ctrl>+<shift>+v": lambda: self.root.after(0, self.toggle_voice_note),
+            })
+            self._hotkey_listener.daemon = True
+            self._hotkey_listener.start()
             mouse_listener = _pynput_mouse.Listener(on_scroll=self._on_scroll)
             mouse_listener.daemon = True
             mouse_listener.start()
@@ -4040,7 +4477,7 @@ class DogiApp:
             if isinstance(configured_sources, list):
                 valid_sources = {
                     item for item in configured_sources
-                    if item in {"notes", "transcripts", "calendar"}
+                    if item in {"notes", "tasks", "transcripts", "calendar", "memory"}
                 }
                 if valid_sources:
                     self.assistant_sources = valid_sources
@@ -4061,6 +4498,12 @@ class DogiApp:
                 self.stats = offline_decay(self.stats, offline_minutes)
             self.last_greet_date = str(cfg.get("last_greet_date") or "")
             self.last_lunch_date = str(cfg.get("last_lunch_date") or "")
+            self.daily_brief_on = bool(cfg.get("daily_brief", True))
+            self.last_morning_brief_date = str(cfg.get("last_morning_brief_date") or "")
+            self.last_evening_brief_date = str(cfg.get("last_evening_brief_date") or "")
+            self.xp = max(0, int(cfg.get("xp") or 0))
+            accessory = str(cfg.get("accessory") or "none")
+            self.accessory = accessory if accessory_unlocked(accessory, self.xp) else "none"
         except Exception:
             pass
 
@@ -4093,6 +4536,11 @@ class DogiApp:
                         "stats_ts": time.time(),
                         "last_greet_date": self.last_greet_date,
                         "last_lunch_date": self.last_lunch_date,
+                        "daily_brief": self.daily_brief_on,
+                        "last_morning_brief_date": self.last_morning_brief_date,
+                        "last_evening_brief_date": self.last_evening_brief_date,
+                        "xp": self.xp,
+                        "accessory": self.accessory,
                     },
                     indent=2,
                 ),
@@ -4226,6 +4674,8 @@ class DogiApp:
                     note_store=self.note_store,
                     transcript_dir=RECORDINGS_DIR / "transcripts",
                     calendar_events=events,
+                    memory_store=self.memory_store,
+                    task_store=self.task_store,
                 )
                 self.assistant_status = (
                     f"CODEX MEMBACA {context.source_summary.upper()}..."
@@ -4247,9 +4697,164 @@ class DogiApp:
         ).start()
         return True
 
+    # ------------------------------------------------------- produktivitas v1
+    def show_quick_inbox(self):
+        if self.quick_inbox_window and self.quick_inbox_window.winfo_exists():
+            self.quick_inbox_window.deiconify(); self.quick_inbox_window.lift(); return
+        win=tk.Toplevel(self.root); self.quick_inbox_window=win
+        win.title("Dogi Quick Inbox"); win.configure(bg="#090909"); win.attributes("-topmost",True)
+        win.resizable(False,False)
+        tk.Label(win,text="TANGKAP IDE SEBELUM HILANG",bg="#090909",fg="#f2cf45",font=("Consolas",13,"bold")).pack(anchor="w",padx=18,pady=(16,4))
+        tk.Label(win,text="Simpan sebagai tugas atau catatan lokal.",bg="#090909",fg="#929292",font=("Consolas",8)).pack(anchor="w",padx=18)
+        entry=tk.Entry(win,bg="#1e1e1e",fg="#f5f2e9",insertbackground="#f5f2e9",relief="flat",font=("Consolas",11),width=52)
+        entry.pack(fill="x",padx=18,pady=14,ipady=8); entry.focus_set()
+        row=tk.Frame(win,bg="#090909"); row.pack(fill="x",padx=18,pady=(0,16))
+        def save(kind):
+            text=entry.get().strip()
+            if not text:return
+            try:
+                if kind=="task": self.task_store.create(text,source="quick-inbox"); self.task_status="QUICK INBOX MENAMBAH TUGAS"
+                else: self.note_store.create(f"Quick Inbox - {datetime.now().strftime('%d %b %H.%M')}",text)
+                if self.control_center:
+                    self.control_center._refresh_tasks(); self.control_center._refresh_notes()
+                if self.pets:self.pets[0].show_msg("Sudah kusimpan!",3)
+                win.destroy()
+            except Exception as exc:messagebox.showwarning("Quick Inbox",str(exc),parent=win)
+        tk.Button(row,text="SIMPAN TUGAS",command=lambda:save("task"),bg="#f2cf45",fg="#090909",relief="flat",font=("Consolas",9,"bold"),padx=12,pady=8).pack(side="left")
+        tk.Button(row,text="SIMPAN CATATAN",command=lambda:save("note"),bg="#1e1e1e",fg="#f5f2e9",relief="flat",font=("Consolas",9,"bold"),padx=12,pady=8).pack(side="right")
+        entry.bind("<Return>",lambda _e:save("task")); win.bind("<Escape>",lambda _e:win.destroy())
+
+    def show_global_search(self):
+        if self.search_window and self.search_window.winfo_exists():
+            self.search_window.deiconify(); self.search_window.lift(); return
+        win=tk.Toplevel(self.root); self.search_window=win
+        win.title("Cari Semua - DogiPet"); win.configure(bg="#090909"); win.geometry("760x480"); win.attributes("-topmost",True)
+        tk.Label(win,text="CARI CATATAN, TUGAS, TRANSKRIP, AGENDA & MEMORI",bg="#090909",fg="#f2cf45",font=("Consolas",12,"bold")).pack(anchor="w",padx=18,pady=(16,8))
+        entry=tk.Entry(win,bg="#1e1e1e",fg="#f5f2e9",insertbackground="#f5f2e9",relief="flat",font=("Consolas",11))
+        entry.pack(fill="x",padx=18,ipady=7)
+        box=tk.Listbox(win,bg="#151515",fg="#f5f2e9",selectbackground="#f2cf45",selectforeground="#090909",relief="flat",font=("Consolas",9),exportselection=False)
+        box.pack(fill="both",expand=True,padx=18,pady=12)
+        results=[]
+        def refresh(_event=None):
+            nonlocal results
+            results=global_search(entry.get(),notes=self.note_store.all(),tasks=self.task_store.all(),memories=self.memory_store.all(),transcript_dir=RECORDINGS_DIR/"transcripts",calendar_events=self.calendar_events)
+            box.delete(0,"end")
+            for item in results:box.insert("end",item.display())
+        def copy(_event=None):
+            selected=box.curselection()
+            if selected:
+                win.clipboard_clear();win.clipboard_append(results[selected[0]].display())
+        entry.bind("<KeyRelease>",refresh);box.bind("<Double-Button-1>",copy);win.bind("<Escape>",lambda _e:win.destroy());entry.focus_set()
+
+    def toggle_voice_note(self):
+        if self.voice_processing:return
+        if self.meeting_recorder.recording:
+            messagebox.showinfo("Voice Note","Hentikan rekaman rapat terlebih dahulu.")
+            return
+        if self.voice_recorder.recording:
+            self.voice_status="MENYELESAIKAN VOICE NOTE...";self.voice_recorder.stop();return
+        try:
+            self.voice_status="MEMULAI MIKROFON...";self.voice_recorder.start("microphone")
+            if self.pets:self.pets[0].show_msg("Voice note dimulai",3)
+        except MeetingRecorderError as exc:messagebox.showwarning("Voice Note",str(exc))
+
+    def _poll_voice_recorder(self):
+        for event,payload in self.voice_recorder.poll():
+            if event=="started":self.voice_status="MEREKAM VOICE NOTE  /  CTRL+SHIFT+V UNTUK BERHENTI"
+            elif event=="error":self.voice_status="VOICE NOTE GAGAL";messagebox.showwarning("Voice Note",str(payload))
+            elif event=="stopped" and isinstance(payload,RecordingResult):self._process_voice_note(payload.files)
+
+    def _process_voice_note(self,files):
+        self.voice_processing=True;self.voice_status="WHISPER LOKAL SEDANG MENTRANSKRIP..."
+        def worker():
+            try:
+                pieces=[transcribe_audio_local(path,model_name=self.local_whisper_model,model_dir=WHISPER_MODELS_DIR) for path in files]
+                body="\n\n".join(pieces);note=self.note_store.create(f"Voice Note - {datetime.now().strftime('%d %b %Y %H.%M')}",body);error=None
+            except Exception as exc:note,error=None,str(exc)
+            self.voice_processing=False
+            def finish():
+                if error:self.voice_status="VOICE NOTE GAGAL";messagebox.showwarning("Voice Note",error)
+                else:
+                    self.voice_status="VOICE NOTE TERSIMPAN DI CATATAN"
+                    if self.control_center:self.control_center._refresh_notes(select_id=note.id)
+                    if self.pets:self.pets[0].show_msg("Voice note tersimpan!",4)
+            try:self.root.after(0,finish)
+            except tk.TclError:pass
+        threading.Thread(target=worker,daemon=True,name="dogipet-voice-note").start()
+
+    def start_focus_for_task(self,task_id):
+        item=self.task_store.get(task_id)
+        if not item:return
+        self.focus_task_id=item.id
+        if not self.pomo_end:self.toggle_pomodoro()
+        if self.pets:self.pets[0].show_msg(f"Fokus: {item.title[:35]}",5)
+
+    def add_xp(self,amount):
+        old=progression_level(self.xp);self.xp=max(0,self.xp+int(amount));new=progression_level(self.xp);self.save_config()
+        if new>old and self.pets:self.pets[0].show_msg(f"Naik ke level {new}!",6);self.pets[0].set_state("happy")
+
+    def on_task_completed(self,task):
+        self.add_xp(30);self._plugin_event("task_done");self.task_status="TUGAS SELESAI  /  +30 XP"
+        if self.pets:self.pets[0].show_msg(f"Selesai: {task.title[:32]}!",5);self.pets[0].set_state("happy")
+
+    def select_accessory(self,name):
+        if not accessory_unlocked(name,self.xp):return
+        self.accessory=name;self.save_config()
+        if self.control_center:self.control_center.sync_from_app()
+
+    def toggle_daily_brief(self):
+        self.daily_brief_on=not self.daily_brief_on;self.save_config()
+        if self.control_center:self.control_center.sync_from_app()
+
+    def _plugin_event(self,event):
+        triggers=self.plugin_manager.triggers_for(event)
+        if triggers and self.pets:
+            trigger=random.choice(triggers);self.pets[0].show_msg(trigger["message"],5);self.pets[0].set_state(trigger["state"])
+
+    def reload_plugins(self):
+        loaded=self.plugin_manager.reload();self.data_status=f"{len(loaded)} PLUGIN DEKLARATIF DIMUAT"
+        if self.control_center:self.control_center.sync_from_app()
+
+    def open_plugins_folder(self):
+        PLUGINS_DIR.mkdir(parents=True,exist_ok=True)
+        try:os.startfile(str(PLUGINS_DIR))
+        except OSError:webbrowser.open(PLUGINS_DIR.as_uri())
+
+    def create_plugin_template(self):
+        path=self.plugin_manager.create_template();self.data_status=f"CONTOH PLUGIN DIBUAT  /  {path.name}";self.open_plugins_folder()
+
+    @staticmethod
+    def _json_payload(path,default):
+        try:return json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:return default
+
+    def export_backup(self,path,password):
+        transcripts={p.name:p.read_text(encoding="utf-8") for p in (RECORDINGS_DIR/"transcripts").glob("*.txt")} if (RECORDINGS_DIR/"transcripts").is_dir() else {}
+        plugins={p.name:p.read_text(encoding="utf-8") for p in PLUGINS_DIR.glob("*.json")} if PLUGINS_DIR.is_dir() else {}
+        payload={"format":1,"created_at":datetime.now().astimezone().isoformat(),"notes":self._json_payload(NOTES_FILE,{"version":1,"notes":[]}),"tasks":self._json_payload(TASKS_FILE,{"version":1,"tasks":[]}),"memories":self._json_payload(MEMORIES_FILE,{"version":1,"memories":[]}),"config":self._json_payload(CONF_FILE,{}),"transcripts":transcripts,"plugins":plugins}
+        export_encrypted_backup(path,payload,password)
+
+    def import_backup(self,path,password):
+        payload=import_encrypted_backup(path,password)
+        for target,key in ((NOTES_FILE,"notes"),(TASKS_FILE,"tasks"),(MEMORIES_FILE,"memories"),(CONF_FILE,"config")):
+            value=payload.get(key)
+            if isinstance(value,dict):target.parent.mkdir(parents=True,exist_ok=True);target.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding="utf-8")
+        transcript_dir=RECORDINGS_DIR/"transcripts";transcript_dir.mkdir(parents=True,exist_ok=True)
+        for name,content in (payload.get("transcripts") or {}).items():
+            safe=pathlib.Path(str(name)).name
+            if safe.endswith(".txt"): (transcript_dir/safe).write_text(str(content),encoding="utf-8")
+        PLUGINS_DIR.mkdir(parents=True,exist_ok=True)
+        for name,content in (payload.get("plugins") or {}).items():
+            safe=pathlib.Path(str(name)).name
+            if safe.endswith(".json"): (PLUGINS_DIR/safe).write_text(str(content),encoding="utf-8")
+        self.plugin_manager.reload()
+        self._load_config()
+
     def start_meeting_recording(self):
         if self.meeting_processing:
             raise MeetingRecorderError("Tunggu proses notulen AI selesai.")
+        if self.voice_recorder.recording:
+            raise MeetingRecorderError("Hentikan Voice Note sebelum merekam rapat.")
         self.meeting_audio_files = ()
         self.meeting_status = "MEMULAI PEREKAMAN..."
         return self.meeting_recorder.start(self.meeting_record_source)
@@ -4492,10 +5097,37 @@ class DogiApp:
                 pet.show_msg(message, 8)
             bark(self.root, self.sound_style)
 
+    def _check_task_deadlines(self, now):
+        if now < self._task_poll_at:
+            return
+        self._task_poll_at = now + 30
+        current = datetime.now().astimezone()
+        for task in self.task_store.all():
+            if task.done or not task.due_at:
+                continue
+            try:
+                due = datetime.fromisoformat(task.due_at).astimezone()
+            except ValueError:
+                continue
+            remaining = int((due - current).total_seconds() / 60)
+            key = (task.id, task.due_at)
+            if key in self._task_reminded or remaining > 10:
+                continue
+            self._task_reminded.add(key)
+            message = (
+                f"Deadline lewat: {task.title[:28]}"
+                if remaining < 0 else f"{task.title[:28]}: {remaining} mnt lagi"
+            )
+            if self.pets:
+                self.pets[0].set_state("meeting_alert")
+                self.pets[0].show_msg(message, 8)
+            bark(self.root, self.sound_style)
+
     # ------------------------------------------------------- kebutuhan & jam
     def on_fed(self):
         self.stats["kenyang"] = clamp_stat(self.stats["kenyang"] + 35)
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 8)
+        self._plugin_event("fed")
 
     def on_petted(self):
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 10)
@@ -4607,7 +5239,9 @@ class DogiApp:
                 self.pets[0].show_msg("Segar lagi! Guk!", 5)
 
     def _check_clock(self, now):
-        """Sapaan pagi sekali sehari dan pengingat makan siang."""
+        """Sapaan, brief lokal pagi/sore, dan pengingat makan siang."""
+        if self.smoke_test:
+            return
         if now < self._clock_cd:
             return
         self._clock_cd = now + 10
@@ -4619,7 +5253,26 @@ class DogiApp:
                 self.pets[0].show_msg("Selamat pagi! Guk!", 6)
                 self.pets[0].set_state("happy")
             self.save_config()
-        elif local.tm_hour == LUNCH_HOUR and self.last_lunch_date != today:
+        if self.daily_brief_on and 7 <= local.tm_hour <= 11 \
+                and self.last_morning_brief_date != today:
+            self.last_morning_brief_date = today
+            pending = sum(not item.done for item in self.task_store.all())
+            current_date = datetime.now().astimezone().date()
+            agenda = sum(event.local_start().date() == current_date for event in self.calendar_events)
+            if self.pets:
+                self.pets[0].show_msg(f"Hari ini: {pending} tugas, {agenda} agenda", 8)
+            self._plugin_event("morning")
+            self.save_config()
+        if self.daily_brief_on and 17 <= local.tm_hour <= 21 \
+                and self.last_evening_brief_date != today:
+            self.last_evening_brief_date = today
+            done = sum(item.done and item.updated_at.startswith(today) for item in self.task_store.all())
+            pending = sum(not item.done for item in self.task_store.all())
+            if self.pets:
+                self.pets[0].show_msg(f"Hari ini selesai {done}; tersisa {pending} tugas", 8)
+            self._plugin_event("evening")
+            self.save_config()
+        if local.tm_hour == LUNCH_HOUR and self.last_lunch_date != today:
             self.last_lunch_date = today
             if self.pets:
                 self.pets[0].show_msg("Waktunya makan siang!", 6)
@@ -4698,6 +5351,7 @@ class DogiApp:
     def toggle_pomodoro(self):
         if self.pomo_end:
             self.pomo_end = None
+            self.focus_task_id = ""
             if self.pets:
                 self.pets[0].show_msg("Pomodoro dibatalkan", 3)
         else:
@@ -4979,6 +5633,7 @@ class DogiApp:
         self._poll_agent_status()
         self._agent_watchdog(now)
         self._poll_meeting_recorder()
+        self._poll_voice_recorder()
         self._poll_update_events()
         self._update_stats(now)
         self._check_clock(now)
@@ -4986,10 +5641,15 @@ class DogiApp:
         self._check_mischief(now)
         self._check_meeting(now)
         self._check_calendar(now)
+        self._check_task_deadlines(now)
         self._apply_presentation(now)
 
         if self.pomo_end and now >= self.pomo_end:
             self.pomo_end = None
+            if self.focus_task_id:
+                self.add_xp(20)
+                self._plugin_event("focus_done")
+                self.focus_task_id = ""
             self.celebrate_all(
                 f"Pomodoro selesai! Istirahat {BREAK_MIN} menit"
             )
@@ -5026,6 +5686,7 @@ class DogiApp:
 
     def quit(self):
         self.meeting_recorder.close()
+        self.voice_recorder.close()
         self.save_config()
         self.root.destroy()
 
@@ -5044,6 +5705,7 @@ if __name__ == "__main__":
         # Memastikan library native hasil bundling PyInstaller dapat dimuat.
         import av  # noqa: F401
         import ctranslate2  # noqa: F401
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
         from faster_whisper import WhisperModel  # noqa: F401
         raise SystemExit(0)
     is_smoke_test = "--smoke-test" in sys.argv
