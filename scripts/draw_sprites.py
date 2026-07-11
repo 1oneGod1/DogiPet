@@ -37,6 +37,7 @@ FIXED = {
     "b": "#5be0ff",  # baris kode di layar
     "e": "#20242a",  # latar layar
     "y": "#ecd24a",  # genangan pipis
+    "s": "#aeb8c0",  # asap lelah mengetik
 }
 
 THEMES = {
@@ -48,7 +49,7 @@ THEMES = {
     "Putih":  {"o": "#f4f0e6", "c": "#ffffff", "k": "#9a938a"},
 }
 
-VALID_CHARS = set("ocknNprzwdglbey.")
+VALID_CHARS = set("ocknNprzwdglbeys.")
 
 
 # -------------------------------------------------------------- kompositor
@@ -608,6 +609,28 @@ kllk
 .kk.
 """)
 
+SMOKE_SMALL = part("""
+.ss.
+s..s
+.ss.
+""")
+
+SMOKE_MEDIUM = part("""
+..ss..ss.
+.s..ss..s
+s.......s
+.ss...ss.
+..sssss..
+""")
+
+SMOKE_LARGE = part("""
+..ss....ss....
+.s..s..s..ss..
+s....ss....s..
+.ss......ss.s.
+..ssssssssss..
+""")
+
 BONE = part("""
 kk...kk
 kwwwwwk
@@ -762,6 +785,19 @@ def keyboard_pose(paw_phase=0, key_phase=0, blush_level=0, tail=0,
             (13, 20), (14, 20), (15, 20)),
     }[max(0, min(3, blush_level))]
     patch(canvas, [(gy, gx, "r") for gy, gx in blush])
+
+    # Asap muncul dari sela kuping dan membesar sesuai lama mengetik. Semua
+    # kepulan berhenti di atas y=5 sehingga tidak menimpa siluet kepala.
+    smoke = {
+        0: None,
+        1: (SMOKE_SMALL, 17, 2),
+        2: (SMOKE_MEDIUM, 15, 1),
+        3: (SMOKE_LARGE, 10, 0),
+    }[max(0, min(3, blush_level))]
+    if smoke:
+        art, smoke_x, smoke_y = smoke
+        smoke_x += key_phase % 2
+        stamp(canvas, art, smoke_x, smoke_y)
     return canvas
 
 

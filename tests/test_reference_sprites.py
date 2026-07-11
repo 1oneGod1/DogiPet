@@ -60,6 +60,19 @@ class ReferenceSpriteTests(unittest.TestCase):
         self.assertEqual(red_counts, sorted(red_counts))
         self.assertEqual(len(set(red_counts)), 4)
 
+    def test_typing_smoke_grows_with_heat_level(self):
+        root = ROOT / "assets" / "sprites" / "shiba"
+        smoke = (174, 184, 192, 255)
+        smoke_counts = []
+        for index in (0, 4, 8, 12):
+            image = Image.open(root / f"type_{index}.png").convert("RGBA")
+            smoke_counts.append(sum(
+                pixel == smoke for pixel in image.get_flattened_data()
+            ))
+        self.assertEqual(smoke_counts, sorted(smoke_counts))
+        self.assertEqual(smoke_counts[0], 0)
+        self.assertEqual(len(set(smoke_counts)), 4)
+
     def test_typing_has_complete_standalone_keyboard(self):
         root = ROOT / "assets" / "sprites" / "coklat"
         for index in range(16):
