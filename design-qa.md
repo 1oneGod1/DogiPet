@@ -92,7 +92,7 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 103 unit test lulus, termasuk detektor gesture, false-positive jitter,
+- 104 unit test lulus, termasuk detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 1056 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller, executable smoke, installer silent, installed-app smoke, dan

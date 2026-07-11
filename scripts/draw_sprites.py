@@ -581,6 +581,26 @@ kllllllllllllk
 .kkkkkkkkkkkk.
 """)
 
+# Kaki depan mengetik dibuat sebagai tungkai utuh dari dada sampai telapak.
+# Versi raised berhenti satu baris di atas keyboard; versi press menyentuh
+# tombol. Dengan demikian telapak tidak lagi tampak melayang/terpotong.
+TYPE_ARM_PRESS = part("""
+kok.
+kok.
+.kok
+.kok
+..kk
+..kk
+""")
+
+TYPE_ARM_RAISED = part("""
+kok.
+.kok
+.kok
+..kk
+..kk
+""")
+
 MOUSE = part("""
 .kk.
 kllk
@@ -716,21 +736,21 @@ def keyboard_pose(paw_phase=0, key_phase=0, blush_level=0, tail=0,
                   head_mode="open"):
     """Dogi mengetik di keyboard terpisah dengan pipi makin memerah."""
     canvas = sitting(head_mode=head_mode, pupils="center", tail=tail)
-    stamp(canvas, KEYBOARD, 17, 24)
+    stamp(canvas, KEYBOARD, 15, 24)
 
     # Tombol biru bergantian tepat di bawah telapak yang sedang menekan.
-    left_key = 19 + (key_phase % 3)
-    right_key = 24 + ((key_phase + 1) % 3)
+    left_key = 18 + (key_phase % 2)
+    right_key = 22 + ((key_phase + 1) % 2)
     patch(canvas, [(25, left_key, "b"), (25, right_key, "b")])
 
-    # Kedua telapak naik-turun berlawanan sehingga gestur benar-benar terbaca
-    # sebagai mengetik, bukan hanya Dogi duduk di depan prop.
+    # Tungkai jauh ditempel dulu, kemudian tungkai dekat. Keduanya berawal pada
+    # torso baris 18 sehingga tidak ada celah transparan antara dada dan paw.
     if paw_phase == 0:
-        stamp(canvas, PAW, 18, 21)
-        stamp(canvas, PAW, 23, 23)
+        stamp(canvas, TYPE_ARM_PRESS, 15, 18)
+        stamp(canvas, TYPE_ARM_RAISED, 18, 18)
     else:
-        stamp(canvas, PAW, 18, 23)
-        stamp(canvas, PAW, 23, 21)
+        stamp(canvas, TYPE_ARM_RAISED, 15, 18)
+        stamp(canvas, TYPE_ARM_PRESS, 18, 18)
 
     # Pipi empat tahap: normal, hangat, merah, sangat merah. Koordinat ini
     # berada satu baris di bawah kedua mata pada template crouch.

@@ -65,11 +65,24 @@ class ReferenceSpriteTests(unittest.TestCase):
         for index in range(16):
             image = Image.open(root / f"type_{index}.png").convert("RGBA")
             with self.subTest(frame=index):
-                # Keyboard mandiri berada di x=17..30, y=24..27.
-                self.assertNotEqual(image.getpixel((90, 125))[3], 0)
-                self.assertNotEqual(image.getpixel((145, 130))[3], 0)
+                # Keyboard mandiri berada di x=15..28, y=24..27.
+                self.assertNotEqual(image.getpixel((80, 125))[3], 0)
+                self.assertNotEqual(image.getpixel((135, 130))[3], 0)
                 self.assertNotEqual(image.getpixel((100, 125))[3], 0)
                 self.assertLess(image.getbbox()[2], image.width)
+
+    def test_typing_forelegs_connect_body_to_keyboard(self):
+        root = ROOT / "assets" / "sprites" / "shiba"
+        for index in range(16):
+            image = Image.open(root / f"type_{index}.png").convert("RGBA")
+            alpha = image.getchannel("A")
+            with self.subTest(frame=index):
+                # Kedua koridor kaki depan dari torso (y=18) menuju keyboard
+                # (y=24) harus memiliki piksel pada setiap baris logis.
+                for logical_y in range(18, 24):
+                    row = alpha.crop((75, logical_y * 5, 115,
+                                      logical_y * 5 + 5))
+                    self.assertIsNotNone(row.getbbox())
 
     def test_typing_and_scrolling_use_different_props(self):
         root = ROOT / "assets" / "sprites" / "coklat"
