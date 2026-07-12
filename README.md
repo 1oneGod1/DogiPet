@@ -67,6 +67,10 @@ sementara desktop pet tetap aktif.
 - Beri tulang yang bisa diseret ke posisi mana pun di virtual desktop. Selama
   tulang masih dipegang, Dogi duduk menatapnya sambil mengibaskan ekor; saat
   dilepas ia berlari mengambil dan memakannya. Mendukung hingga empat Dogi.
+- Teman Dogi berinteraksi otomatis saat berdekatan: saling menyapa, bermain
+  membungkuk dan melompat, kejar-kejaran dengan peran pelari/pengejar, adu
+  dorong lucu tanpa luka, atau rebahan bersama. Aksi juga dapat dipicu lewat
+  klik kanan **Main dengan teman** dan berhenti rapi bila salah satu terganggu.
 - Kebutuhan Dogi (kenyang, energi, senang) yang memengaruhi tingkahnya —
   beri tulang, elus, dan biarkan ia tidur agar tetap ceria.
 - Sadar waktu: sapaan selamat pagi, pengingat makan siang, dan lebih sering

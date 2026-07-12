@@ -120,6 +120,18 @@ class ReferenceSpriteTests(unittest.TestCase):
         self.assertEqual(dogi.sprite_asset_state("tail_wag"), "tail_wag")
         self.assertEqual(dogi.sprite_asset_state("beg"), "happy")
         self.assertEqual(dogi.sprite_asset_state("zoomies"), "chase")
+        self.assertEqual(dogi.sprite_asset_state("friend_chase"), "chase")
+        self.assertEqual(dogi.sprite_asset_state("friend_cuddle"), "sleep")
+
+    def test_friend_play_and_tussle_have_distinct_handmade_cycles(self):
+        root = ROOT / "assets" / "sprites" / "shiba"
+        for state in ("friend_play", "friend_tussle"):
+            with self.subTest(state=state):
+                frames = [
+                    Image.open(root / f"{state}_{index}.png").tobytes()
+                    for index in range(4)
+                ]
+                self.assertEqual(len(set(frames)), 4)
 
     def test_every_theme_and_state_has_all_directional_frames(self):
         for theme in dogi.COLOR_THEMES:
