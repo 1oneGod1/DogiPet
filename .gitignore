@@ -12,6 +12,8 @@ release/
 .DS_Store
 Thumbs.db
 .env
+node_modules/
+.npm-cache/
 credentials*.json
 client_secret*.json
 token*.json

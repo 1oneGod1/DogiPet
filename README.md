@@ -71,6 +71,29 @@ sementara desktop pet tetap aktif.
   membungkuk dan melompat, kejar-kejaran dengan peran pelari/pengejar, adu
   dorong lucu tanpa luka, atau rebahan bersama. Aksi juga dapat dipicu lewat
   klik kanan **Main dengan teman** dan berhenti rapi bila salah satu terganggu.
+- Halaman **Dunia Dogi** menyimpan profil hingga empat Dogi. Masing-masing dapat
+  memiliki nama, tema, aksesori, kemampuan, dan kepribadian ceria, aktif, manja,
+  pemalu, atau usil yang benar-benar mengubah pilihan tingkah sehari-hari.
+- Hubungan antarteman berkembang saat bermain, berpelukan, dan adu dorong.
+  Dogi manja dapat ikut meminta dielus ketika temannya mendapat perhatian.
+- Mainan pixel dapat diletakkan dan diseret di virtual desktop: bola dan
+  frisbee memicu balapan dua Dogi, boneka dikejar Dogi terdekat, sedangkan tali
+  memicu tarik-tarikan bila ada dua teman yang siap bermain.
+- Kasur dan rumah pixel dapat dipindahkan ke monitor mana pun. Dogi yang lelah
+  atau sudah malam dapat pulang sendiri dan tidur di tempat yang disimpan.
+- Enam trik dapat dilatih dari Dunia Dogi: duduk, tiarap, putar, lompat,
+  salaman, dan pura-pura tidur. Kemajuan latihan tersimpan serta membuka
+  aksesori baru tanpa sistem hukuman atau pembelian.
+- Lemari aksesori per Dogi mendukung bandana, bintang, mahkota, kalung,
+  kacamata, dan topi pesta. Pilihan `none` benar-benar melepas aksesori.
+- Mood Dogi terlihat dari kebutuhan dan konteks, dengan event musiman offline.
+  Reaksi musik hanya membaca judul jendela aplikasi; reaksi suara bersifat
+  opt-in dan hanya mengukur level amplitudo sesaat tanpa merekam isi audio.
+- Album lokal menangkap sprite Dogi transparan pada momen bermain, berlatih,
+  dan berinteraksi. Maksimal 200 metadata foto disimpan di `~/.dogi/album/`.
+- Kepribadian Dogi juga memengaruhi nada jawaban **Tanya Dogi**, tetapi fakta,
+  tanggal, angka, keputusan, dan prioritas tetap harus berasal dari konteks yang
+  secara eksplisit dipilih pengguna.
 - Kebutuhan Dogi (kenyang, energi, senang) yang memengaruhi tingkahnya —
   beri tulang, elus, dan biarkan ia tidur agar tetap ceria.
 - Sadar waktu: sapaan selamat pagi, pengingat makan siang, dan lebih sering
@@ -135,6 +158,22 @@ python dogi.py
 ```
 
 Klik kanan Dogi untuk membuka menu fitur dan pengaturan.
+
+## Website DogiPet
+
+Landing page resmi berada di folder `website/` dan memakai sprite yang sama
+dengan aplikasi desktop. Setiap perubahan yang masuk ke branch `main` akan
+dibangun dan diterbitkan otomatis melalui GitHub Pages.
+
+```powershell
+cd website
+npm install
+npm run dev
+```
+
+Build produksi dapat diperiksa dengan `npm run build`. Tombol unduh pada website
+selalu menunjuk ke installer rolling release `continuous`, sehingga pengguna
+mendapat build terbaru yang telah selesai melewati pengujian GitHub Actions.
 
 ## Catatan dan Rapikan AI
 
@@ -321,7 +360,7 @@ Jalankan pemeriksaan sebelum commit:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py dogi_assistant.py productivity.py dogi_plugins.py calendar_integration.py secure_store.py
+python -m py_compile dogi.py updater.py dogi_hook.py agent_hooks.py notes_ai.py meeting_ai.py meeting_recorder.py local_transcriber.py codex_integration.py dogi_assistant.py productivity.py dogi_plugins.py calendar_integration.py secure_store.py pet_life.py audio_reactivity.py
 ```
 
 Repository: <https://github.com/1oneGod1/DogiPet>
