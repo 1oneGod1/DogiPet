@@ -55,8 +55,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git tag -f continuous "${GITHUB_SHA}"
-          git push origin refs/tags/continuous --force
           if gh release view continuous >/dev/null 2>&1; then
             gh release upload continuous release/DogiPet-Setup.exe release/DogiPet-Setup.exe.sha256 release/build-info.json --clobber
             gh release edit continuous --title "DogiPet Continuous" --notes "Automatic build from main at ${GITHUB_SHA}." --prerelease
