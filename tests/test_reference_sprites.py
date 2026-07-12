@@ -166,6 +166,18 @@ class ReferenceSpriteTests(unittest.TestCase):
             Image.open(root / "tail_wag_1.png").tobytes(),
         )
 
+    def test_waiting_for_food_is_a_seated_wagging_animation(self):
+        root = ROOT / "assets" / "sprites" / "shiba"
+        waiting = [Image.open(root / f"wait_food_{index}.png").convert("RGBA")
+                   for index in range(4)]
+        fetch = Image.open(root / "fetch_0.png").convert("RGBA")
+
+        self.assertEqual(len({frame.tobytes() for frame in waiting}), 4)
+        self.assertTrue(all(frame.tobytes() != fetch.tobytes()
+                            for frame in waiting))
+        # Siluet duduk tetap menyentuh tanah tetapi tidak memakai langkah lebar.
+        self.assertTrue(all(frame.getbbox()[3] >= 95 for frame in waiting))
+
 
 if __name__ == "__main__":
     unittest.main()

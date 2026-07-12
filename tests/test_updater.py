@@ -45,7 +45,10 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(
             updater,
             "_request_json",
-            side_effect=[self.release, {"version": "1.0.0", "build_id": "new-sha"}],
+            side_effect=[
+                self.release,
+                {"version": updater.VERSION, "build_id": "new-sha"},
+            ],
         ):
             info = updater.get_update_info("continuous", current_build="old-sha")
         self.assertEqual(info.build_id, "new-sha")
@@ -54,7 +57,10 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(
             updater,
             "_request_json",
-            side_effect=[self.release, {"version": "1.0.0", "build_id": "same-sha"}],
+            side_effect=[
+                self.release,
+                {"version": updater.VERSION, "build_id": "same-sha"},
+            ],
         ):
             info = updater.get_update_info("continuous", current_build="same-sha")
         self.assertIsNone(info)

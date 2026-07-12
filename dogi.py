@@ -964,6 +964,7 @@ FRAMES = {
     "walk":  [WALK_1, WALK_2],
     "chase": [WALK_1, WALK_2],
     "fetch": [WALK_1, WALK_2],
+    "wait_food": [HAPPY_1, HAPPY_2],
     "sleep": [SLEEP_1, SLEEP_2],
     "happy": [HAPPY_1, HAPPY_2],
     "dig":   [DIG_1, DIG_2],
@@ -996,6 +997,7 @@ SPRITE_FRAME_COUNTS = {
     "walk": 4,
     "chase": 4,
     "fetch": 4,
+    "wait_food": 4,
     "sleep": 4,
     "happy": 4,
     "dig": 4,
@@ -1150,9 +1152,12 @@ def bark(root, style=DEFAULT_SOUND):
 class Bone:
     """Tulang kecil di layar yang menunggu diambil Dogi."""
 
-    def __init__(self, app, x, y):
+    def __init__(self, app, x, y, pet=None):
         self.app = app
+        self.pet = pet
         self.x, self.y = x, y
+        self.held = False
+        self._drag_offset = None
         self.win = tk.Toplevel(app.root)
         self.win.title("DogiPet Bone")
         self.win.overrideredirect(True)
@@ -1168,6 +1173,7 @@ class Bone:
             highlightthickness=0, bd=0,
         )
         cv.pack()
+        self.canvas = cv
         for gy, row in enumerate(BONE_SPRITE):
             for gx, ch in enumerate(row):
                 if ch == "w":
@@ -1177,6 +1183,51 @@ class Bone:
                         fill=FIXED_COLORS["w"], outline="#c9c2b2",
                     )
         self.win.geometry(window_geometry(BONE_W, BONE_H, x, y))
+        cv.bind("<ButtonPress-1>", self._on_press)
+        cv.bind("<B1-Motion>", self._on_drag)
+        cv.bind("<ButtonRelease-1>", self._on_release)
+
+    def _move_to(self, x, y):
+        """Pindahkan tulang, termasuk ke monitor dengan koordinat negatif."""
+        left, top, right, bottom = app_desktop_bounds(self.app)
+        self.x = max(left, min(right - BONE_W, int(x)))
+        self.y = max(top, min(bottom - BONE_H, int(y)))
+        self.win.geometry(window_geometry(BONE_W, BONE_H, self.x, self.y))
+
+    def _on_press(self, event):
+        self.held = True
+        self._drag_offset = (event.x_root - self.x, event.y_root - self.y)
+        try:
+            self.win.lift()
+        except tk.TclError:
+            pass
+        pet = self.pet
+        if pet is not None and pet.fetch_bone is self:
+            pet.gaze_x, pet.gaze_y = event.x_root, event.y_root
+            pet.facing = 1 if event.x_root >= pet.center_x() else -1
+            pet.set_state("wait_food")
+            pet.show_msg("Aku tunggu tulangnya!", 3)
+
+    def _on_drag(self, event):
+        if not self.held or self._drag_offset is None:
+            return
+        offset_x, offset_y = self._drag_offset
+        self._move_to(event.x_root - offset_x, event.y_root - offset_y)
+        pet = self.pet
+        if pet is not None and pet.fetch_bone is self:
+            pet.gaze_x, pet.gaze_y = event.x_root, event.y_root
+            pet.facing = 1 if event.x_root >= pet.center_x() else -1
+
+    def _on_release(self, event):
+        if not self.held:
+            return
+        self._on_drag(event)
+        self.held = False
+        self._drag_offset = None
+        pet = self.pet
+        if pet is not None and pet.fetch_bone is self:
+            pet.set_state("fetch")
+            pet.show_msg("Hap! Aku ambil!", 2)
 
     def destroy(self):
         try:
@@ -1278,10 +1329,12 @@ class DogiPet:
         # Notifikasi global (agent selesai, meeting, sapaan jam, dan perilaku
         # spontan) dapat memanggil set_state di antara dua tick. Dulu panggilan
         # itu membatalkan fetch dan meninggalkan tulang sendirian di layar.
-        if self.state == "fetch" and self.fetch_bone is not None \
-                and state not in ("fetch", "hold", "eat"):
+        feeding_states = ("fetch", "wait_food")
+        if self.state in feeding_states and self.fetch_bone is not None \
+                and state not in ("fetch", "wait_food", "hold", "eat"):
             return
-        if self.state == "fetch" and state not in ("fetch", "hold"):
+        if self.state in feeding_states \
+                and state not in ("fetch", "wait_food", "hold"):
             self.fetch_bone = None
         self.state = state
         self.frame_i = 0
@@ -1293,6 +1346,7 @@ class DogiPet:
                 "happy": 14,
                 "chase": 60,
                 "fetch": 999999,
+                "wait_food": 999999,
                 "dig":   20,
                 "hold":  999999,
                 "type":  20,
@@ -1516,7 +1570,7 @@ class DogiPet:
         # status agent AI: fokus "think", tapi main lempar tulang tetap boleh
         # menembusnya supaya Dogi tak pernah benar-benar terkunci diam.
         if thinking and self.state not in (
-            "think", "jump", "meeting_alert", "fetch", "eat",
+            "think", "jump", "meeting_alert", "fetch", "wait_food", "eat",
         ):
             self.set_state("think")
         elif not thinking and self.state == "think":
@@ -1602,6 +1656,16 @@ class DogiPet:
             if self.x == target and self.y == target_y:
                 self.set_state("happy")
 
+        elif self.state == "wait_food" and self.fetch_bone:
+            # Selama tulang masih dipegang, Dogi tidak mengejar: ia duduk,
+            # menatap tulang, dan mengibaskan ekornya. Lepas mouse untuk mulai.
+            bone_x = self.fetch_bone.x + BONE_W // 2
+            bone_y = self.fetch_bone.y + BONE_H // 2
+            self.gaze_x, self.gaze_y = bone_x, bone_y
+            self.facing = 1 if bone_x >= self.center_x() else -1
+            if not getattr(self.fetch_bone, "held", False):
+                self.set_state("fetch")
+
         elif self.state == "fetch" and self.fetch_bone:
             target = self.fetch_bone.x - CANVAS_W // 2 + BONE_W // 2
             target_y = self.fetch_bone.y - (CANVAS_H - BONE_H - 6)
@@ -1661,7 +1725,7 @@ class DogiPet:
         self.blink = (
             self.state in (
                 "idle", "dig", "type", "think",
-                "curious", "beg",
+                "curious", "beg", "wait_food",
                 "scroll_up", "scroll_down", "meeting_watch",
             )
             and random.random() < 0.08
@@ -1693,7 +1757,7 @@ class DogiPet:
                 "pee",
             ):
                 self.set_state("idle")
-            elif self.state not in ("think", "fetch"):
+            elif self.state not in ("think", "fetch", "wait_food"):
                 nxt = random.choices(
                     [
                         "idle", "walk", "sleep", "dig", "curious",
@@ -1736,8 +1800,13 @@ class DogiPet:
             self.app.on_petted()
         else:
             self.ground_y = self.y
-            if self._pre_drag_state == "fetch" and self.fetch_bone:
-                self.set_state("fetch")
+            if self._pre_drag_state in ("fetch", "wait_food") \
+                    and self.fetch_bone:
+                self.set_state(
+                    "wait_food"
+                    if getattr(self.fetch_bone, "held", False)
+                    else "fetch"
+                )
             elif self.app.agent_thinking:
                 self.set_state("think")
             else:
@@ -5593,7 +5662,7 @@ class DogiApp:
         )
         pet = min(free, key=lambda p: abs(p.center_x() - x))
         y = pet.y + CANVAS_H - BONE_H - 6
-        bone = Bone(self, x, y)
+        bone = Bone(self, x, y, pet=pet)
         self.bones.append(bone)
         pet.fetch_bone = bone
         pet.set_state("fetch")

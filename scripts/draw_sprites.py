@@ -885,6 +885,25 @@ def build_frames() -> dict[str, list[list[str]]]:
         happy.append(freeze(canvas))
     frames["happy"] = happy
 
+    # wait_food: Dogi duduk menatap tulang yang masih dipegang. Ekor runcing
+    # berkibas dan setitik air liur turun perlahan sebelum siklus diulang.
+    wait_food = []
+    drool_cells = (
+        ((16, 24, "z"),),
+        ((16, 24, "z"), (17, 24, "z")),
+        ((17, 24, "z"), (18, 24, "z")),
+        (),
+    )
+    for index in range(4):
+        canvas = sitting(
+            head_mode="blink" if index == 3 else "open",
+            pupils="up",
+            tail=index % 2,
+        )
+        patch(canvas, list(drool_cells[index]))
+        wait_food.append(freeze(canvas))
+    frames["wait_food"] = wait_food
+
     # dig: kaki depan mengais bergantian, debu terbang
     dig = []
     for index in range(4):
@@ -1070,7 +1089,8 @@ def main() -> None:
     frames = build_frames()
     expected = {
         "idle": 4, "walk": 4, "chase": 4, "fetch": 4, "sleep": 4,
-        "happy": 4, "dig": 4, "eat": 4, "hold": 4, "type": 16,
+        "happy": 4, "wait_food": 4, "dig": 4, "eat": 4, "hold": 4,
+        "type": 16,
         "scroll_up": 4, "scroll_down": 4, "meeting_alert": 4,
         "meeting_watch": 4, "think": 4, "tail_wag": 4,
         "jump": 4, "dizzy": 4, "pee": 4,

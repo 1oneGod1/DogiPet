@@ -64,7 +64,9 @@ sementara desktop pet tetap aktif.
   (ambang 45/60/90 menit bisa diatur di halaman Fokus).
 - Klik untuk mengelus; saat di-drag Dogi berubah ke pose digendong dengan kaki
   berayun, lalu mendarat ceria ketika dilepas.
-- Beri tulang, tambah hingga empat Dogi, dan interaksi antarteman.
+- Beri tulang yang bisa diseret ke posisi mana pun di virtual desktop. Selama
+  tulang masih dipegang, Dogi duduk menatapnya sambil mengibaskan ekor; saat
+  dilepas ia berlari mengambil dan memakannya. Mendukung hingga empat Dogi.
 - Kebutuhan Dogi (kenyang, energi, senang) yang memengaruhi tingkahnya —
   beri tulang, elus, dan biarkan ia tidur agar tetap ceria.
 - Sadar waktu: sapaan selamat pagi, pengingat makan siang, dan lebih sering

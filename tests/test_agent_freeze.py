@@ -80,6 +80,28 @@ class ThinkOverrideTests(unittest.TestCase):
             self.assertEqual(pet.state, "fetch")
             self.assertIs(pet.fetch_bone, bone)
 
+    def test_held_bone_keeps_dogi_seated_and_still(self):
+        pet = make_pet()
+        bone = SimpleNamespace(x=1200, y=400, held=True)
+        pet.state = "wait_food"
+        pet.fetch_bone = bone
+        before = (pet.x, pet.y)
+
+        pet.tick(100.0, 50, 50, False, True, scrolling=0)
+
+        self.assertEqual(pet.state, "wait_food")
+        self.assertEqual((pet.x, pet.y), before)
+        self.assertEqual(pet.facing, 1)
+
+    def test_unheld_bone_changes_waiting_into_fetch(self):
+        pet = make_pet()
+        pet.state = "wait_food"
+        pet.fetch_bone = SimpleNamespace(x=1200, y=400, held=False)
+
+        pet.tick(100.0, 50, 50, False, False, scrolling=0)
+
+        self.assertEqual(pet.state, "fetch")
+
     def test_fetch_can_enter_eat_after_bone_is_collected(self):
         pet = make_pet()
         pet.state = "fetch"
