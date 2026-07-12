@@ -44,9 +44,11 @@ import wave
 import struct
 import threading
 import pathlib
+import shutil
 import webbrowser
 
 import agent_hooks
+from audio_reactivity import AudioLevelMonitor
 from codex_integration import (
     CODEX_INSTALL_URL,
     CodexIntegrationError,
@@ -76,6 +78,17 @@ from productivity import (
     global_search,
     import_encrypted_backup,
     progression_level,
+)
+from pet_life import (
+    ACCESSORIES as LIFE_ACCESSORIES,
+    HOMES,
+    PERSONALITIES,
+    TOYS,
+    TRICKS,
+    PetLifeStore,
+    media_reaction_for,
+    mood_for,
+    seasonal_event,
 )
 from dogi_plugins import PluginManager
 from secure_store import SecureStore, SecureStoreError
@@ -183,6 +196,8 @@ RECORDINGS_DIR = CONF_DIR / "recordings"
 WHISPER_MODELS_DIR = CONF_DIR / "whisper-models"
 VOICE_DIR = RECORDINGS_DIR / "voice-notes"
 PLUGINS_DIR = CONF_DIR / "plugins"
+PET_LIFE_FILE = CONF_DIR / "pet_life.json"
+ALBUM_DIR = CONF_DIR / "album"
 CALENDAR_SYNC_SECONDS = 300
 CALENDAR_RETRY_SECONDS = 60
 DEFAULT_CALENDAR_REMINDER_MIN = 10
@@ -463,6 +478,8 @@ def visible_meeting_windows():
     """Kembalikan jendela meeting Windows tanpa mengambil audio/video/data rapat."""
     if not sys.platform.startswith("win"):
         return []
+
+
     try:
         import ctypes
         from ctypes import wintypes
@@ -550,6 +567,27 @@ def visible_meeting_windows():
         return sorted(candidates, key=lambda item: item["area"], reverse=True)
     except (AttributeError, OSError, ValueError):
         return []
+
+
+def foreground_window_title():
+    """Read only the visible title of the foreground window on Windows."""
+    if not sys.platform.startswith("win"):
+        return ""
+    try:
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        return buffer.value
+    except (AttributeError, NameError, OSError, ValueError):
+        return ""
 
 
 def rect_covers_monitor(window, monitor, tol=2):
@@ -978,6 +1016,10 @@ FRAMES = {
     "friend_chase": [WALK_1, WALK_2],
     "friend_tussle": [WALK_1, HAPPY_2],
     "friend_cuddle": [SLEEP_1, SLEEP_2],
+    "toy_chase": [WALK_1, WALK_2],
+    "toy_play": [HAPPY_1, HAPPY_2],
+    "go_home": [WALK_1, WALK_2],
+    "dance": [DIG_1, DIG_2],
     "sleep": [SLEEP_1, SLEEP_2],
     "happy": [HAPPY_1, HAPPY_2],
     "dig":   [DIG_1, DIG_2],
@@ -1050,6 +1092,10 @@ SPRITE_STATE_ASSET = {
     "sniff": "dig",
     "friend_chase": "chase",
     "friend_cuddle": "sleep",
+    "toy_chase": "chase",
+    "toy_play": "friend_play",
+    "go_home": "walk",
+    "dance": "tail_wag",
 }
 
 
@@ -1095,6 +1141,38 @@ BONE_SPRITE = [
 BONE_SCALE = 4
 BONE_W = len(BONE_SPRITE[0]) * BONE_SCALE
 BONE_H = len(BONE_SPRITE) * BONE_SCALE
+
+OBJECT_W = 80
+OBJECT_H = 56
+OBJECT_SCALE = 4
+OBJECT_SPRITES = {
+    "bola": [
+        "..kkk..", ".krrrk.", "krrwrrk", "krrrrrk",
+        "krrrrrk", ".krrrk.", "..kkk..",
+    ],
+    "frisbee": [
+        "...........", "...kkkkk...", ".kkzzzzzkk.",
+        "kzzzzzzzzzk", ".kkkkkkkkk.", "...........",
+    ],
+    "tali": [
+        "kk........kk", "kyk......kyk", ".kykkkkkkyk.",
+        "..kyyyyyyk..", "...kkkkkk...",
+    ],
+    "boneka": [
+        ".kk...kk.", "kook.kook", ".koooook.", "..knnk..",
+        ".kooooook", "koocccook", ".kk..kk.",
+    ],
+    "kasur": [
+        "..............", ".kkkkkkkkkkkk.", "kooooooooooook",
+        "kocccccccccook", "kcccccccccccck", ".kkkkkkkkkkkk.",
+    ],
+    "rumah": [
+        "......kk......", ".....koook.....", "....koooook....",
+        "...koooooook...", "..koooooooooook..", ".kkkkkkkkkkkkkk.",
+        ".kooooooooooook.", ".kooookkkkoooook.", ".kooook..koooook.",
+        ".kkkkkk..kkkkkk.",
+    ],
+}
 
 
 def mirror(frame):
@@ -1253,12 +1331,100 @@ class Bone:
             pass
 
 
+class DesktopPetObject:
+    """Draggable toy, bed, or dog house drawn on the same hard pixel grid."""
+
+    def __init__(self, app, kind, x, y):
+        if kind not in OBJECT_SPRITES:
+            raise ValueError("Objek desktop Dogi tidak dikenal.")
+        self.app = app
+        self.kind = kind
+        self.category = "home" if kind in HOMES else "toy"
+        self.x, self.y = int(x), int(y)
+        self.held = False
+        self._drag_offset = None
+        self.win = tk.Toplevel(app.root)
+        self.win.title(f"DogiPet {kind}")
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        if app.transparent_ok:
+            try:
+                self.win.attributes("-transparentcolor", TRANSPARENT)
+            except tk.TclError:
+                pass
+        bg = TRANSPARENT if app.transparent_ok else "#222222"
+        self.canvas = tk.Canvas(
+            self.win, width=OBJECT_W, height=OBJECT_H, bg=bg,
+            highlightthickness=0, bd=0,
+        )
+        self.canvas.pack()
+        palette = dict(FIXED_COLORS)
+        palette.update(COLOR_THEMES.get(app.theme, COLOR_THEMES["Shiba"]))
+        art = OBJECT_SPRITES[kind]
+        width = max(len(row) for row in art) * OBJECT_SCALE
+        height = len(art) * OBJECT_SCALE
+        ox = max(0, (OBJECT_W - width) // 2)
+        oy = max(0, (OBJECT_H - height) // 2)
+        for gy, row in enumerate(art):
+            for gx, char in enumerate(row):
+                color = palette.get(char)
+                if not color:
+                    continue
+                x0, y0 = ox + gx * OBJECT_SCALE, oy + gy * OBJECT_SCALE
+                self.canvas.create_rectangle(
+                    x0, y0, x0 + OBJECT_SCALE, y0 + OBJECT_SCALE,
+                    fill=color, outline=color,
+                )
+        self._move_to(x, y)
+        self.canvas.bind("<ButtonPress-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+
+    def _move_to(self, x, y):
+        left, top, right, bottom = app_desktop_bounds(self.app)
+        self.x = max(left, min(right - OBJECT_W, int(x)))
+        self.y = max(top, min(bottom - OBJECT_H, int(y)))
+        self.win.geometry(window_geometry(OBJECT_W, OBJECT_H, self.x, self.y))
+
+    def _on_press(self, event):
+        self.held = True
+        self._drag_offset = (event.x_root - self.x, event.y_root - self.y)
+        try:
+            self.win.lift()
+        except tk.TclError:
+            pass
+
+    def _on_drag(self, event):
+        if not self.held or self._drag_offset is None:
+            return
+        ox, oy = self._drag_offset
+        self._move_to(event.x_root - ox, event.y_root - oy)
+
+    def _on_release(self, event):
+        if not self.held:
+            return
+        self._on_drag(event)
+        self.held = False
+        self._drag_offset = None
+        self.app.on_desktop_object_dropped(self)
+
+    def destroy(self):
+        try:
+            self.win.destroy()
+        except tk.TclError:
+            pass
+
+
 # ---------------------------------------------------------------- satu Dogi
 class DogiPet:
-    def __init__(self, app, x, theme, primary=False):
+    def __init__(self, app, x, theme, primary=False, profile_id="dogi-1"):
         self.app = app
         self.primary = primary
         self.theme = theme
+        self.profile_id = profile_id
+        profile = app.pet_life.profile(profile_id)
+        self.personality = profile["personality"]
+        self.equipped_accessory = profile["equipped"]
 
         self.win = tk.Toplevel(app.root)
         self.win.title("DogiPet")
@@ -1291,6 +1457,7 @@ class DogiPet:
         self.blink = False
         self.temp_msg = None
         self.fetch_bone = None
+        self.target_object = None
         self.friend_session = None
         self.friend_role = 0
         self._sprite_cache = {}
@@ -1409,6 +1576,7 @@ class DogiPet:
     def visual_facing(self):
         if self.state in (
             "walk", "chase", "fetch", "zoomies", "friend_chase",
+            "toy_chase", "go_home",
         ):
             return self.motion_facing
         return self.facing
@@ -1504,7 +1672,7 @@ class DogiPet:
 
     def _draw_accessory(self):
         """Overlay aksesori sederhana pada grid 5 px agar tetap pixel-art."""
-        name = getattr(self.app, "accessory", "none")
+        name = getattr(self, "equipped_accessory", "none")
         if name == "none":
             return
         center = CANVAS_W // 2
@@ -1526,6 +1694,38 @@ class DogiPet:
             self.canvas.create_rectangle(x - 22, y + 15, x + 22, y + 25, fill=color, outline=color)
             for offset in (-20, 0, 20):
                 self.canvas.create_rectangle(x + offset - 5, y, x + offset + 5, y + 20, fill=color, outline=color)
+        elif name == "collar":
+            y = SPR_Y + 80
+            self.canvas.create_rectangle(
+                center - 24, y, center + 24, y + 5,
+                fill="#4fa3e3", outline="#4fa3e3",
+            )
+            self.canvas.create_rectangle(
+                center - 3, y + 5, center + 3, y + 11,
+                fill="#f2cf45", outline="#f2cf45",
+            )
+        elif name == "glasses":
+            y = SPR_Y + 55
+            color = "#20242a"
+            for offset in (-18, 12):
+                self.canvas.create_rectangle(
+                    center + offset, y, center + offset + 12, y + 10,
+                    outline=color, width=3,
+                )
+            self.canvas.create_rectangle(
+                center - 6, y + 3, center + 12, y + 6,
+                fill=color, outline=color,
+            )
+        elif name == "party_hat":
+            color = "#e2574c"
+            x, y = center + 7, SPR_Y + 3
+            for row, width in enumerate((5, 15, 25, 35)):
+                self.canvas.create_rectangle(
+                    x - width // 2, y + row * 5,
+                    x + width // 2, y + row * 5 + 5,
+                    fill=color if row % 2 == 0 else "#f2cf45",
+                    outline=color if row % 2 == 0 else "#f2cf45",
+                )
 
     def draw(self, cx, cy):
         self.canvas.delete("all")
@@ -1704,6 +1904,26 @@ class DogiPet:
                 self.set_state("eat")
                 self.app.on_fed()
 
+        elif self.state in ("toy_chase", "go_home") and self.target_object:
+            obj = self.target_object
+            target = obj.x - CANVAS_W // 2 + OBJECT_W // 2
+            target_y = obj.y - (CANVAS_H - OBJECT_H - 5)
+            top, bottom = self._roam_bounds()
+            target_y = max(top, min(bottom, target_y))
+            self.facing = 1 if target >= self.x else -1
+            speed = ZOOM_SPEED if self.state == "toy_chase" else WALK_SPEED + 2
+            self.x = self._step_axis(self.x, target, speed)
+            self.y = self._step_axis(self.y, target_y, VCHASE_SPEED)
+            self.ground_y = self.y
+            if self.x == target and self.y == target_y:
+                if self.state == "toy_chase":
+                    self.app.finish_toy_fetch(self, obj)
+                else:
+                    self.target_object = None
+                    self.show_msg("Rumahku nyaman~", 3)
+                    self.set_state("sleep", 90)
+                    self.app.capture_album_moment("pulang-rumah", self)
+
         elif self.state in ("friend_play", "friend_tussle", "friend_cuddle"):
             session = self.friend_session
             partner = None if session is None else session.get("partner", {}).get(self)
@@ -1818,7 +2038,7 @@ class DogiPet:
                 "sleep", "happy", "dig", "type",
                 "scroll_up", "scroll_down", "meeting_alert", "meeting_watch",
                 "dizzy", "curious", "tail_wag", "beg", "glance", "sniff",
-                "pee",
+                "pee", "toy_play", "dance",
             ):
                 self.set_state("idle")
             elif self.state not in ("think", "fetch", "wait_food"):
@@ -1827,7 +2047,7 @@ class DogiPet:
                         "idle", "walk", "sleep", "dig", "curious",
                         "tail_wag", "beg", "zoomies", "spin", "sniff", "pee",
                     ],
-                    weights=self.app.state_weights(),
+                    weights=self.app.state_weights(self),
                 )[0]
                 self.set_state(nxt)
                 if nxt == "spin" and random.random() < 0.5:
@@ -1861,7 +2081,7 @@ class DogiPet:
     def _on_release(self, e):
         if not self._moved:
             self.set_state("happy")
-            self.app.on_petted()
+            self.app.on_petted(self)
         else:
             self.ground_y = self.y
             if self._pre_drag_state in ("fetch", "wait_food") \
@@ -1880,6 +2100,9 @@ class DogiPet:
 
     def _set_theme(self, name):
         self.theme = name
+        profile = self.app.pet_life.profile(self.profile_id)
+        profile["theme"] = name
+        self.app.pet_life.save()
         if self.primary:
             self.app.theme = name
             self.app.save_config()
@@ -2040,6 +2263,7 @@ class ControlCenter:
         self._assistant_result_title = "Hasil Tanya Dogi"
         self._task_ids = []
         self._memory_ids = []
+        self.life_pet_index = 0
 
         self.pages = {}
         self.nav_buttons = {}
@@ -2047,6 +2271,7 @@ class ControlCenter:
         self._build_shell()
         self._build_home_page()
         self._build_customize_page()
+        self._build_world_page()
         self._build_focus_page()
         self._build_tasks_page()
         self._build_notes_page()
@@ -2159,6 +2384,7 @@ class ControlCenter:
         for page, label in (
             ("HOME", "BERANDA"),
             ("CUSTOMIZE", "TAMPILAN"),
+            ("WORLD", "DUNIA DOGI"),
             ("FOCUS", "FOKUS"),
             ("TASKS", "TUGAS & INBOX"),
             ("NOTES", "CATATAN & AGENDA"),
@@ -2363,6 +2589,174 @@ class ControlCenter:
             )
             button.pack(side="left", padx=4, expand=True, fill="x")
             self.sound_buttons[style] = button
+
+    def _build_world_page(self):
+        page = self._new_page(
+            "WORLD",
+            "DUNIA DOGI YANG HIDUP.",
+            "Karakter, latihan, mainan, rumah, mood, musik, dan album.",
+        )
+
+        profile_card = self._card(page)
+        profile_card.pack(fill="x", pady=(0, 10))
+        top = tk.Frame(profile_card, bg=self.PANEL)
+        top.pack(fill="x", padx=14, pady=(12, 7))
+        self._label(top, "DOGI AKTIF", 8, self.MUTED, bold=True).pack(side="left")
+        self.life_summary_label = self._label(top, "", 8, self.ACCENT, bold=True)
+        self.life_summary_label.pack(side="right")
+        self.life_pet_buttons = []
+        pet_row = tk.Frame(profile_card, bg=self.PANEL)
+        pet_row.pack(fill="x", padx=14, pady=(0, 7))
+        for index in range(MAX_PETS):
+            button = self._button(
+                pet_row, f"DOGI {index + 1}",
+                lambda value=index: self._select_life_pet(value),
+                width=13, pady=5,
+            )
+            button.pack(side="left", padx=(0, 5))
+            self.life_pet_buttons.append(button)
+        personality_row = tk.Frame(profile_card, bg=self.PANEL)
+        personality_row.pack(fill="x", padx=14, pady=(0, 12))
+        self.life_personality_buttons = {}
+        for personality in PERSONALITIES:
+            button = self._button(
+                personality_row, personality.upper(),
+                lambda value=personality: self._set_life_personality(value),
+                width=10, pady=5,
+            )
+            button.pack(side="left", padx=(0, 5))
+            self.life_personality_buttons[personality] = button
+
+        columns = tk.Frame(page, bg=self.BG)
+        columns.pack(fill="both", expand=True)
+        left = tk.Frame(columns, bg=self.BG, width=325)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        right = tk.Frame(columns, bg=self.BG, width=325)
+        right.pack(side="left", fill="both", expand=True, padx=(6, 0))
+
+        toy_card = self._card(left)
+        toy_card.pack(fill="x", pady=(0, 8))
+        self._label(toy_card, "MAINAN INTERAKTIF", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(10, 5)
+        )
+        toy_row = tk.Frame(toy_card, bg=self.PANEL)
+        toy_row.pack(fill="x", padx=12, pady=(0, 10))
+        for kind in TOYS:
+            self._button(
+                toy_row, kind.upper(),
+                lambda value=kind: self.app.spawn_desktop_object(value),
+                width=7, pady=5,
+            ).pack(side="left", padx=(0, 4))
+
+        home_card = self._card(left)
+        home_card.pack(fill="x", pady=(0, 8))
+        self._label(home_card, "RUMAH & KASUR", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(10, 5)
+        )
+        home_row = tk.Frame(home_card, bg=self.PANEL)
+        home_row.pack(fill="x", padx=12, pady=(0, 10))
+        for kind in HOMES:
+            self._button(
+                home_row, kind.upper(),
+                lambda value=kind: self.app.spawn_desktop_object(value),
+                width=13, pady=5,
+            ).pack(side="left", padx=(0, 5))
+
+        prefs_card = self._card(left)
+        prefs_card.pack(fill="x")
+        self._label(prefs_card, "REAKSI & EVENT", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(10, 5)
+        )
+        self.life_preference_buttons = {}
+        for key, label in (
+            ("media_reaction", "MUSIK"),
+            ("sound_reaction", "SUARA"),
+            ("mood_bubbles", "MOOD"),
+            ("seasonal_events", "MUSIM"),
+        ):
+            button = self._button(
+                prefs_card, label,
+                lambda value=key: self._toggle_life_preference(value),
+                width=8, pady=5,
+            )
+            button.pack(side="left", padx=(12 if key == "media_reaction" else 0, 4), pady=(0, 10))
+            self.life_preference_buttons[key] = button
+
+        trick_card = self._card(right)
+        trick_card.pack(fill="x", pady=(0, 8))
+        self._label(trick_card, "LATIHAN TRIK", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(10, 5)
+        )
+        trick_grid = tk.Frame(trick_card, bg=self.PANEL)
+        trick_grid.pack(fill="x", padx=12, pady=(0, 10))
+        for index, trick in enumerate(TRICKS):
+            self._button(
+                trick_grid, trick.replace("_", " ").upper(),
+                lambda value=trick: self._perform_life_trick(value),
+                width=12, pady=5,
+            ).grid(row=index // 2, column=index % 2, padx=3, pady=3)
+
+        wardrobe = self._card(right)
+        wardrobe.pack(fill="x", pady=(0, 8))
+        self._label(wardrobe, "LEMARI AKSESORI", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(10, 5)
+        )
+        accessory_grid = tk.Frame(wardrobe, bg=self.PANEL)
+        accessory_grid.pack(fill="x", padx=12, pady=(0, 10))
+        self.life_accessory_buttons = {}
+        for index, accessory in enumerate(LIFE_ACCESSORIES):
+            button = self._button(
+                accessory_grid, accessory.upper(),
+                lambda value=accessory: self._equip_life_accessory(value),
+                width=10, pady=4,
+            )
+            button.grid(row=index // 3, column=index % 3, padx=2, pady=2)
+            self.life_accessory_buttons[accessory] = button
+
+        album = self._card(right)
+        album.pack(fill="x")
+        self._label(album, "ALBUM KENANGAN", 8, self.MUTED, bold=True).pack(
+            anchor="w", padx=12, pady=(9, 5)
+        )
+        album_row = tk.Frame(album, bg=self.PANEL)
+        album_row.pack(fill="x", padx=12, pady=(0, 9))
+        self._button(album_row, "AMBIL FOTO", self._capture_life_photo, accent=True, width=12, pady=5).pack(side="left", padx=(0, 5))
+        self._button(album_row, "BUKA ALBUM", self.app.open_album, width=12, pady=5).pack(side="left")
+
+    def _life_pet(self):
+        if not self.app.pets:
+            return None
+        self.life_pet_index = max(0, min(self.life_pet_index, len(self.app.pets) - 1))
+        return self.app.pets[self.life_pet_index]
+
+    def _select_life_pet(self, index):
+        if index < len(self.app.pets):
+            self.life_pet_index = index
+            self.sync_from_app()
+
+    def _set_life_personality(self, personality):
+        pet = self._life_pet()
+        if pet:
+            self.app.set_pet_personality(pet, personality)
+            self.sync_from_app()
+
+    def _perform_life_trick(self, trick):
+        self.app.perform_trick(trick, self._life_pet())
+        self.sync_from_app()
+
+    def _equip_life_accessory(self, accessory):
+        pet = self._life_pet()
+        if pet:
+            self.app.equip_life_accessory(pet, accessory)
+            self.sync_from_app()
+
+    def _toggle_life_preference(self, key):
+        self.app.toggle_life_preference(key)
+        self.sync_from_app()
+
+    def _capture_life_photo(self):
+        self.app.capture_album_moment("foto-manual", self._life_pet())
+        self.sync_from_app()
 
     def _build_focus_page(self):
         page = self._new_page(
@@ -4090,6 +4484,9 @@ class ControlCenter:
         self.app.save_config()
         self.preview_name.configure(text=name.upper())
         if self.app.pets:
+            profile = self.app.pet_life.profile(self.app.pets[0].profile_id)
+            profile["name"] = name
+            self.app.pet_life.save()
             self.app.pets[0].show_msg(f"Namaku {name}!", 3)
 
     def _select_theme(self, name):
@@ -4104,6 +4501,59 @@ class ControlCenter:
         self.preview_name.configure(text=self.app.pet_name.upper())
         self._draw_preview()
         self.pet_count_label.configure(text=f"{len(self.app.pets)} / {MAX_PETS} DOGI AKTIF")
+        life_pet = self._life_pet()
+        for index, button in enumerate(self.life_pet_buttons):
+            available = index < len(self.app.pets)
+            if available:
+                profile = self.app.pet_life.profile(self.app.pets[index].profile_id)
+                button.configure(
+                    text=profile["name"].upper(),
+                    state="normal",
+                    bg=self.ACCENT if index == self.life_pet_index else self.PANEL_ALT,
+                    fg=self.DARK if index == self.life_pet_index else self.TEXT,
+                )
+            else:
+                button.configure(text="—", state="disabled", bg=self.PANEL_ALT)
+        if life_pet is not None:
+            profile = self.app.pet_life.profile(life_pet.profile_id)
+            event = seasonal_event()
+            relationships = [
+                self.app.pet_life.relationship(life_pet.profile_id, other.profile_id)
+                for other in self.app.pets if other is not life_pet
+            ]
+            relation_text = (
+                f"TEMAN {sum(relationships) // len(relationships)}%"
+                if relationships else "BELUM ADA TEMAN"
+            )
+            self.life_summary_label.configure(
+                text=f"MOOD {self.app.mood_status}  /  {relation_text}  /  {event['label']}"
+            )
+            for personality, button in self.life_personality_buttons.items():
+                selected = personality == life_pet.personality
+                button.configure(
+                    bg=self.ACCENT if selected else self.PANEL_ALT,
+                    fg=self.DARK if selected else self.TEXT,
+                )
+            for accessory, button in self.life_accessory_buttons.items():
+                unlocked = accessory in profile["inventory"]
+                selected = accessory == life_pet.equipped_accessory
+                button.configure(
+                    state="normal" if unlocked else "disabled",
+                    bg=self.ACCENT if selected else self.PANEL_ALT,
+                    fg=self.DARK if selected else self.TEXT,
+                )
+        for key, button in self.life_preference_buttons.items():
+            enabled = self.app.pet_life.preference(key)
+            button.configure(
+                text=("ON " if enabled else "OFF ") + {
+                    "media_reaction": "MUSIK",
+                    "sound_reaction": "SUARA",
+                    "mood_bubbles": "MOOD",
+                    "seasonal_events": "MUSIM",
+                }[key],
+                bg=self.ACCENT if enabled else self.PANEL_ALT,
+                fg=self.DARK if enabled else self.TEXT,
+            )
         for name, button in self.theme_buttons.items():
             selected = name == self.app.theme
             button.configure(
@@ -4461,6 +4911,21 @@ class DogiApp:
         self.pet_name = "Dogi"
         self.show_control_center_on_start = True
         self.control_center = None
+        self.pet_life = PetLifeStore(PET_LIFE_FILE)
+        self.desktop_objects = []
+        self.home_object = None
+        self.media_reaction_on = self.pet_life.preference("media_reaction")
+        self.sound_reaction_on = self.pet_life.preference("sound_reaction")
+        self.mood_bubbles_on = self.pet_life.preference("mood_bubbles")
+        self.seasonal_events_on = self.pet_life.preference("seasonal_events")
+        self.mood_status = "SANTAI"
+        self._media_checked_at = 0.0
+        self._media_reaction_until = 0.0
+        self._home_checked_at = 0.0
+        self._season_greet_date = ""
+        self.audio_level_monitor = AudioLevelMonitor()
+        if self.sound_reaction_on and not self.smoke_test:
+            self.audio_level_monitor.start()
 
         # Catatan tersimpan lokal; API key dan token OAuth berada dalam blob
         # DPAPI terpisah, tidak pernah masuk config.json atau notes.json.
@@ -4543,6 +5008,12 @@ class DogiApp:
 
         self.theme = "Shiba"
         self._load_config()
+        primary_profile = self.pet_life.profiles[0]
+        if self.accessory != "none" and primary_profile.get("equipped") == "none":
+            if self.accessory not in primary_profile["inventory"]:
+                primary_profile["inventory"].append(self.accessory)
+            primary_profile["equipped"] = self.accessory
+            self.pet_life.save()
         try:
             if self.calendar_integration.connected():
                 self.calendar_connected = True
@@ -4566,13 +5037,31 @@ class DogiApp:
             mouse_listener.daemon = True
             mouse_listener.start()
 
-        self.pets = [
-            DogiPet(
-                self, self.screen_left + (self.screen_w - CANVAS_W) // 2,
-                self.theme, primary=True,
-            )
-        ]
+        profiles = self.pet_life.profiles[:MAX_PETS]
+        profiles[0]["name"] = self.pet_name
+        profiles[0]["theme"] = self.theme
+        self.pet_life.save()
+        center_x = self.screen_left + (self.screen_w - CANVAS_W) // 2
+        self.pets = []
+        for index, profile in enumerate(profiles):
+            offset = (index - (len(profiles) - 1) / 2) * (FRIEND_DIST - 20)
+            x = int(max(
+                self.screen_left,
+                min(self.screen_right - CANVAS_W, center_x + offset),
+            ))
+            self.pets.append(DogiPet(
+                self, x, profile["theme"], primary=index == 0,
+                profile_id=profile["id"],
+            ))
         self.bones = []
+        saved_home = self.pet_life.data.get("home") or {}
+        if saved_home.get("kind") in HOMES:
+            self.home_object = DesktopPetObject(
+                self, saved_home["kind"],
+                int(saved_home.get("x", center_x)),
+                int(saved_home.get("y", self.screen_bottom - OBJECT_H - 40)),
+            )
+            self.desktop_objects.append(self.home_object)
         self.control_center = ControlCenter(self)
 
         if not self.smoke_test:
@@ -4799,6 +5288,7 @@ class DogiApp:
         self.assistant_status = "MEMERIKSA CODEX..."
         selected = set(sources or ())
         events = tuple(self.calendar_events)
+        personality = self.pets[0].personality if self.pets else "ceria"
 
         def worker():
             context = None
@@ -4819,7 +5309,8 @@ class DogiApp:
                     f"CODEX MEMBACA {context.source_summary.upper()}..."
                 )
                 result = ask_with_codex(
-                    question, context.text, task=task
+                    question, context.text, task=task,
+                    personality=personality,
                 )
                 error = None
             except Exception as exc:
@@ -4969,12 +5460,12 @@ class DogiApp:
     def export_backup(self,path,password):
         transcripts={p.name:p.read_text(encoding="utf-8") for p in (RECORDINGS_DIR/"transcripts").glob("*.txt")} if (RECORDINGS_DIR/"transcripts").is_dir() else {}
         plugins={p.name:p.read_text(encoding="utf-8") for p in PLUGINS_DIR.glob("*.json")} if PLUGINS_DIR.is_dir() else {}
-        payload={"format":1,"created_at":datetime.now().astimezone().isoformat(),"notes":self._json_payload(NOTES_FILE,{"version":1,"notes":[]}),"tasks":self._json_payload(TASKS_FILE,{"version":1,"tasks":[]}),"memories":self._json_payload(MEMORIES_FILE,{"version":1,"memories":[]}),"config":self._json_payload(CONF_FILE,{}),"transcripts":transcripts,"plugins":plugins}
+        payload={"format":1,"created_at":datetime.now().astimezone().isoformat(),"notes":self._json_payload(NOTES_FILE,{"version":1,"notes":[]}),"tasks":self._json_payload(TASKS_FILE,{"version":1,"tasks":[]}),"memories":self._json_payload(MEMORIES_FILE,{"version":1,"memories":[]}),"config":self._json_payload(CONF_FILE,{}),"pet_life":self._json_payload(PET_LIFE_FILE,{}),"transcripts":transcripts,"plugins":plugins}
         export_encrypted_backup(path,payload,password)
 
     def import_backup(self,path,password):
         payload=import_encrypted_backup(path,password)
-        for target,key in ((NOTES_FILE,"notes"),(TASKS_FILE,"tasks"),(MEMORIES_FILE,"memories"),(CONF_FILE,"config")):
+        for target,key in ((NOTES_FILE,"notes"),(TASKS_FILE,"tasks"),(MEMORIES_FILE,"memories"),(CONF_FILE,"config"),(PET_LIFE_FILE,"pet_life")):
             value=payload.get(key)
             if isinstance(value,dict):target.parent.mkdir(parents=True,exist_ok=True);target.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding="utf-8")
         transcript_dir=RECORDINGS_DIR/"transcripts";transcript_dir.mkdir(parents=True,exist_ok=True)
@@ -5267,10 +5758,259 @@ class DogiApp:
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 8)
         self._plugin_event("fed")
 
-    def on_petted(self):
+    def on_petted(self, pet=None):
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 10)
+        pet = pet or (self.pets[0] if self.pets else None)
+        if pet is None:
+            return
+        # Dogi manja ikut meminta perhatian ketika temannya dielus.
+        for other in self.pets:
+            if other is pet or other.personality != "manja":
+                continue
+            if other.state in ("idle", "walk", "curious", "tail_wag"):
+                other.facing = 1 if pet.x > other.x else -1
+                other.set_state("beg", 24)
+                other.show_msg("Aku juga mau dielus!", 3)
 
-    def state_weights(self):
+    def set_pet_personality(self, pet, personality):
+        self.pet_life.set_personality(pet.profile_id, personality)
+        pet.personality = personality
+        pet.show_msg(f"Aku sekarang {personality}!", 3)
+
+    def equip_life_accessory(self, pet, accessory):
+        try:
+            self.pet_life.equip(pet.profile_id, accessory)
+        except ValueError as exc:
+            pet.show_msg(str(exc), 3)
+            return False
+        pet.equipped_accessory = accessory
+        pet.show_msg("Cocok tidak?", 3)
+        return True
+
+    def perform_trick(self, trick, pet=None):
+        pet = pet or (self.pets[0] if self.pets else None)
+        if pet is None or trick not in TRICKS:
+            return False
+        profile = self.pet_life.profile(pet.profile_id)
+        progress = int(profile["training"].get(trick, 0))
+        personality_bonus = {
+            "aktif": 0.12, "ceria": 0.08, "manja": 0.04,
+            "pemalu": -0.08, "usil": -0.03,
+        }.get(pet.personality, 0.0)
+        obey_chance = min(0.98, 0.58 + progress / 220 + personality_bonus)
+        if random.random() > obey_chance:
+            pet.set_state("curious", 18)
+            pet.show_msg("Maksudnya bagaimana?", 3)
+            self.pet_life.train(pet.profile_id, trick, 3)
+            return False
+        state, duration = {
+            "duduk": ("meeting_watch", 26),
+            "tiarap": ("sleep", 36),
+            "putar": ("spin", 28),
+            "lompat": ("jump", len(JUMP_ARC)),
+            "salaman": ("toy_play", 26),
+            "pura_tidur": ("sleep", 48),
+        }[trick]
+        pet.set_state(state, duration)
+        value = self.pet_life.train(pet.profile_id, trick, 10)
+        pet.show_msg(f"{trick.replace('_', ' ').title()}! {value}%", 3)
+        self.capture_album_moment(f"trik-{trick}", pet)
+        return True
+
+    def spawn_desktop_object(self, kind):
+        if kind not in OBJECT_SPRITES or not self.pets:
+            return None
+        if kind in HOMES and self.home_object is not None:
+            self.remove_desktop_object(self.home_object)
+        toys = [obj for obj in self.desktop_objects if obj.category == "toy"]
+        if kind in TOYS and len(toys) >= 4:
+            self.pets[0].show_msg("Mainannya sudah banyak!", 3)
+            return None
+        pet = self.pets[0]
+        left, top, right, bottom = app_desktop_bounds(self)
+        x = max(left, min(right - OBJECT_W, pet.center_x() + 90))
+        y = max(top, min(bottom - OBJECT_H, pet.y + CANVAS_H - OBJECT_H))
+        obj = DesktopPetObject(self, kind, x, y)
+        self.desktop_objects.append(obj)
+        if kind in HOMES:
+            self.home_object = obj
+            self.pet_life.set_home(kind, obj.x, obj.y)
+            pet.show_msg("Rumah baru!", 3)
+        else:
+            self.on_desktop_object_dropped(obj)
+        return obj
+
+    def on_desktop_object_dropped(self, obj):
+        if obj.category == "home":
+            self.home_object = obj
+            self.pet_life.set_home(obj.kind, obj.x, obj.y)
+            if self.pets:
+                self.pets[0].show_msg("Kutaruh rumahku di sini!", 3)
+            return
+        available = [
+            pet for pet in self.pets
+            if pet.state in ("idle", "walk", "curious", "tail_wag", "beg", "happy")
+            and pet.target_object is None
+        ]
+        if not available:
+            return
+        available.sort(key=lambda pet: math.hypot(
+            pet.center_x() - (obj.x + OBJECT_W / 2), pet.y - obj.y
+        ))
+        if obj.kind == "tali" and len(available) >= 2:
+            self._start_friend_session(available[0], available[1], "tussle", time.time())
+            available[0].show_msg("Tarik!", 2)
+            available[1].show_msg("Jangan lepas!", 2)
+            self.root.after(
+                int(FRIEND_DURATIONS["tussle"] * 1000),
+                lambda target=obj: self.remove_desktop_object(target),
+            )
+            return
+        racers = available[:2] if obj.kind in ("bola", "frisbee") else available[:1]
+        for pet in racers:
+            pet.target_object = obj
+            pet.set_state("toy_chase", 999999)
+            pet.show_msg("Balapan!" if len(racers) > 1 else "Mainan!", 2)
+
+    def finish_toy_fetch(self, pet, obj):
+        losers = [
+            other for other in self.pets
+            if other is not pet and other.target_object is obj
+        ]
+        pet.target_object = None
+        self.remove_desktop_object(obj)
+        pet.set_state("toy_play", 32)
+        pet.show_msg("Dapat! Main lagi!", 3)
+        for other in losers:
+            other.set_state("curious", 18)
+            other.show_msg("Hampir dapat!", 2)
+        self.stats["senang"] = clamp_stat(self.stats["senang"] + 7)
+        self.capture_album_moment(f"mainan-{obj.kind}", pet)
+
+    def remove_desktop_object(self, obj):
+        if obj is self.home_object:
+            self.home_object = None
+            self.pet_life.data["home"] = {}
+            self.pet_life.save()
+        if obj in self.desktop_objects:
+            self.desktop_objects.remove(obj)
+        for pet in self.pets:
+            if pet.target_object is obj:
+                pet.target_object = None
+                if pet.state in ("toy_chase", "go_home"):
+                    pet.set_state("idle")
+        obj.destroy()
+
+    def capture_album_moment(self, event="foto", pet=None):
+        pet = pet or (self.pets[0] if self.pets else None)
+        if pet is None:
+            return None
+        asset_state = sprite_asset_state(pet.state)
+        if asset_state not in SPRITE_FRAME_COUNTS:
+            asset_state = "idle"
+        index = sprite_frame_index(asset_state, pet.frame_i)
+        suffix = "_left" if sprite_is_mirrored(pet.state, pet.visual_facing()) else ""
+        source = resource_path(
+            "assets", "sprites", pet.theme.lower(),
+            f"{asset_state}_{index}{suffix}.png",
+        )
+        try:
+            ALBUM_DIR.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            safe_event = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in event)
+            destination = ALBUM_DIR / f"{stamp}-{safe_event}.png"
+            shutil.copyfile(source, destination)
+            self.pet_life.add_album_entry(
+                event, pet.profile_id, str(destination)
+            )
+            pet.show_msg("Masuk album!", 2)
+            return destination
+        except OSError:
+            return None
+
+    def open_album(self):
+        ALBUM_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(ALBUM_DIR)  # type: ignore[attr-defined]
+            else:
+                webbrowser.open(ALBUM_DIR.resolve().as_uri())
+        except OSError:
+            pass
+
+    def toggle_life_preference(self, key):
+        value = self.pet_life.toggle_preference(key)
+        if key == "media_reaction":
+            self.media_reaction_on = value
+        elif key == "sound_reaction":
+            self.sound_reaction_on = value
+            if value and not self.smoke_test:
+                self.audio_level_monitor.start()
+            else:
+                self.audio_level_monitor.stop()
+        elif key == "mood_bubbles":
+            self.mood_bubbles_on = value
+        elif key == "seasonal_events":
+            self.seasonal_events_on = value
+        return value
+
+    def _check_life_context(self, now):
+        if not self.pets:
+            return
+        primary = self.pets[0]
+        mood = mood_for(self.stats, time.localtime(now).tm_hour, primary.state)
+        if mood != self.mood_status:
+            self.mood_status = mood
+            if self.mood_bubbles_on and now >= getattr(self, "_mood_announced_at", 0):
+                self._mood_announced_at = now + 25
+                primary.show_msg(f"Mood: {mood}", 3)
+
+        if self.seasonal_events_on:
+            today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+            if today != self._season_greet_date:
+                self._season_greet_date = today
+                event = seasonal_event(datetime.fromtimestamp(now))
+                if event["id"] != "harian":
+                    primary.show_msg(event["label"], 5)
+                    primary.set_state("happy", 18)
+
+        if self.media_reaction_on and now >= self._media_checked_at:
+            self._media_checked_at = now + 2.5
+            reaction = media_reaction_for(foreground_window_title())
+            if reaction and now >= self._media_reaction_until \
+                    and primary.state in ("idle", "walk", "curious", "tail_wag"):
+                self._media_reaction_until = now + 18
+                if reaction == "dance":
+                    primary.set_state("dance", 32)
+                    primary.show_msg("Musiknya asyik!", 3)
+                else:
+                    primary.set_state("sleep", 42)
+                    primary.show_msg("Musiknya bikin tenang~", 3)
+
+        if self.sound_reaction_on \
+                and self.audio_level_monitor.loud_recently(now) \
+                and now >= self._media_reaction_until \
+                and primary.state in ("idle", "walk", "curious", "tail_wag"):
+            self._media_reaction_until = now + 18
+            primary.set_state("jump", len(JUMP_ARC))
+            primary.show_msg("Wah, suara keras!", 3)
+
+        if self.home_object is not None and now >= self._home_checked_at:
+            self._home_checked_at = now + 8
+            tired = self.stats["energi"] < NEED_LOW or is_night(time.localtime(now).tm_hour)
+            if tired:
+                candidates = [
+                    pet for pet in self.pets
+                    if pet.state in ("idle", "walk", "curious")
+                    and pet.target_object is None
+                ]
+                if candidates:
+                    pet = min(candidates, key=lambda item: abs(item.x - self.home_object.x))
+                    pet.target_object = self.home_object
+                    pet.set_state("go_home", 999999)
+                    pet.show_msg("Pulang dulu~", 3)
+
+    def state_weights(self, pet=None):
         """Bobot perilaku spontan sesuai jam, energi, dan suasana hati."""
         idle, walk, sleep, dig = 4, 4, 1, 1
         curious, tail_wag, beg, zoomies = 2, 2, 1, 1
@@ -5287,6 +6027,20 @@ class DogiApp:
         if self.stats["senang"] < NEED_LOW:
             walk = max(1, walk - 1)  # lesu, malas jalan-jalan
             beg += 3
+        personality = getattr(pet, "personality", "ceria")
+        if personality == "aktif":
+            walk += 3
+            zoomies += 2
+        elif personality == "manja":
+            beg += 3
+            tail_wag += 2
+        elif personality == "pemalu":
+            idle += 3
+            curious += 2
+            zoomies = max(0, zoomies - 1)
+        elif personality == "usil":
+            spin += 2
+            dig += 2
         return [idle, walk, sleep, dig, curious, tail_wag, beg, zoomies,
                 spin, sniff, pee]
 
@@ -5698,7 +6452,11 @@ class DogiApp:
         direction = random.choice((-1, 1))
         x = anchor.x + direction * (FRIEND_DIST - 25)
         x = max(self.screen_left, min(self.screen_right - CANVAS_W, x))
-        newcomer = DogiPet(self, x, random.choice(pool))
+        theme = random.choice(pool)
+        profile = self.pet_life.add_profile(theme)
+        newcomer = DogiPet(
+            self, x, theme, profile_id=profile["id"]
+        )
         self.pets.append(newcomer)
         anchor.show_msg("Ada teman baru!", 3)
         newcomer.show_msg("Hai! Ayo main!", 3)
@@ -5712,6 +6470,7 @@ class DogiApp:
         session = getattr(pet, "friend_session", None)
         if session is not None:
             self._finish_friend_session(session, celebrate=False)
+        self.pet_life.remove_profile(pet.profile_id)
         pet.destroy()
         self.pets.remove(pet)
         if pet.primary and self.pets:
@@ -5787,6 +6546,13 @@ class DogiApp:
         a.show_msg(messages[0], 3)
         b.show_msg(messages[1], 3)
         self.stats["senang"] = clamp_stat(self.stats["senang"] + 3)
+        life = getattr(self, "pet_life", None)
+        if life is not None and hasattr(a, "profile_id") and hasattr(b, "profile_id"):
+            life.adjust_relationship(
+                a.profile_id, b.profile_id, 1 if mode == "tussle" else 3
+            )
+            if mode in ("play", "cuddle"):
+                self.capture_album_moment(f"teman-{mode}", a)
         return True
 
     def _finish_friend_session(self, session, celebrate=True):
@@ -5863,9 +6629,18 @@ class DogiApp:
                         and abs(a.y - b.y) < 80:
                     a.facing = 1 if b.x > a.x else -1
                     b.facing = -a.facing
+                    friendship = 20
+                    life = getattr(self, "pet_life", None)
+                    if life is not None and hasattr(a, "profile_id") and hasattr(b, "profile_id"):
+                        friendship = life.relationship(a.profile_id, b.profile_id)
+                    weights = (
+                        (3, 4, 3, 1, 0)
+                        if friendship < 35 else
+                        ((1, 4, 3, 2, 3) if friendship >= 70 else (2, 4, 3, 2, 1))
+                    )
                     mode = random.choices(
                         ("greet", "play", "chase", "tussle", "cuddle"),
-                        weights=(2, 4, 3, 2, 1),
+                        weights=weights,
                         k=1,
                     )[0]
                     if mode == "greet":
@@ -5891,6 +6666,7 @@ class DogiApp:
         self._poll_voice_recorder()
         self._poll_update_events()
         self._update_stats(now)
+        self._check_life_context(now)
         self._check_clock(now)
         self._check_needs(now)
         self._check_mischief(now)
@@ -5942,6 +6718,7 @@ class DogiApp:
         self.root.after(TICK_MS, self._tick)
 
     def quit(self):
+        self.audio_level_monitor.stop()
         self.meeting_recorder.close()
         self.voice_recorder.close()
         self.save_config()

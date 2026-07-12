@@ -1,4 +1,4 @@
-# Design QA — DogiPet 1.1.0
+# Design QA — DogiPet 2.0.0
 
 **Source visual truth**
 
@@ -95,16 +95,27 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
   `friend_chase` memakai langkah lari dan `friend_cuddle` memakai pose tidur.
 - Sprite digendong, mengetik, scroll, meeting, tidur, makan, dan variasi gerak
   lain ikut berpindah ke aset bersih empat frame.
+- Dunia Dogi dapat memilih satu dari empat profil dan mengatur kepribadian,
+  trik, aksesori, preferensi reaksi, mainan, rumah, dan album tanpa membuka
+  editor kode.
+- Bola dan frisbee menugaskan maksimal dua Dogi untuk berlomba; pemenang masuk
+  pose bermain dan Dogi lain berhenti dengan reaksi kalah yang aman.
+- Tali memulai sesi tarik-tarikan sinkron, sedangkan rumah dan kasur tetap dapat
+  dipindah melintasi koordinat monitor negatif dan tersimpan setelah restart.
+- Kepribadian mengubah bobot tingkah spontan dan nada Tanya Dogi, tetapi prompt
+  Codex secara eksplisit menjaga fakta, tanggal, angka, keputusan, dan prioritas.
+- Reaksi audio default nonaktif. Saat diaktifkan, monitor hanya menyimpan RMS
+  amplitudo dan timestamp sementara; tidak menyimpan audio atau transkrip.
 
 ## Verification
 
-- 150 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
+- 165 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
   plugin deklaratif, konteks privat Tanya Dogi, jembatan Codex,
   perekam PCM, transkripsi/notulen rapat,
   detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 1200 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller dan kedua executable smoke test berhasil.
-- `DogiPet.exe` memiliki ProductVersion `1.1.0`.
+- `DogiPet.exe` memiliki ProductVersion `2.0.0`.
 
 final result: passed
