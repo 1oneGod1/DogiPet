@@ -161,7 +161,16 @@ BREAK_MIN = 5
 STRETCH_EVERY_MIN = 45
 MAX_PETS = 4
 FRIEND_DIST = 130          # jarak px agar dua Dogi saling menyapa
-FRIEND_COOLDOWN = 25       # detik jeda antar sapaan
+FRIEND_COOLDOWN = 18       # jeda agar interaksi terasa hidup tanpa berlebihan
+FRIEND_STATES = (
+    "friend_play", "friend_chase", "friend_tussle", "friend_cuddle",
+)
+FRIEND_DURATIONS = {
+    "play": 6.0,
+    "chase": 8.0,
+    "tussle": 5.5,
+    "cuddle": 7.0,
+}
 
 CONF_DIR = pathlib.Path.home() / ".dogi"
 CONF_FILE = CONF_DIR / "config.json"
@@ -965,6 +974,10 @@ FRAMES = {
     "chase": [WALK_1, WALK_2],
     "fetch": [WALK_1, WALK_2],
     "wait_food": [HAPPY_1, HAPPY_2],
+    "friend_play": [HAPPY_1, HAPPY_2],
+    "friend_chase": [WALK_1, WALK_2],
+    "friend_tussle": [WALK_1, HAPPY_2],
+    "friend_cuddle": [SLEEP_1, SLEEP_2],
     "sleep": [SLEEP_1, SLEEP_2],
     "happy": [HAPPY_1, HAPPY_2],
     "dig":   [DIG_1, DIG_2],
@@ -998,6 +1011,8 @@ SPRITE_FRAME_COUNTS = {
     "chase": 4,
     "fetch": 4,
     "wait_food": 4,
+    "friend_play": 4,
+    "friend_tussle": 4,
     "sleep": 4,
     "happy": 4,
     "dig": 4,
@@ -1033,6 +1048,8 @@ SPRITE_STATE_ASSET = {
     "spin": "chase",
     "pounce": "chase",
     "sniff": "dig",
+    "friend_chase": "chase",
+    "friend_cuddle": "sleep",
 }
 
 
@@ -1274,6 +1291,8 @@ class DogiPet:
         self.blink = False
         self.temp_msg = None
         self.fetch_bone = None
+        self.friend_session = None
+        self.friend_role = 0
         self._sprite_cache = {}
         self.gaze_x = self.center_x()
         self.gaze_y = self.y + SPR_Y
@@ -1388,7 +1407,9 @@ class DogiPet:
             self.motion_facing = self.facing
 
     def visual_facing(self):
-        if self.state in ("walk", "chase", "fetch", "zoomies"):
+        if self.state in (
+            "walk", "chase", "fetch", "zoomies", "friend_chase",
+        ):
             return self.motion_facing
         return self.facing
 
@@ -1683,6 +1704,49 @@ class DogiPet:
                 self.set_state("eat")
                 self.app.on_fed()
 
+        elif self.state in ("friend_play", "friend_tussle", "friend_cuddle"):
+            session = self.friend_session
+            partner = None if session is None else session.get("partner", {}).get(self)
+            if partner is not None:
+                gap = {
+                    "friend_play": 115,
+                    "friend_tussle": 72,
+                    "friend_cuddle": 82,
+                }[self.state]
+                target = int(
+                    session["center_x"] + self.friend_role * gap / 2
+                    - CANVAS_W / 2
+                )
+                target_y = int(session["center_y"])
+                if self.state == "friend_play":
+                    target_y -= 5 if self.frame_i % 4 in (1, 2) else 0
+                elif self.state == "friend_tussle":
+                    target += self.friend_role * (4 if self.frame_i % 2 else -4)
+                    target_y -= 4 if self.frame_i % 4 == 1 else 0
+                speed = 7 if self.state != "friend_cuddle" else 4
+                self.x = self._step_axis(self.x, target, speed)
+                self.y = self._step_axis(self.y, target_y, 4)
+                self.ground_y = self.y
+                self.facing = 1 if partner.center_x() >= self.center_x() else -1
+
+        elif self.state == "friend_chase":
+            session = self.friend_session
+            if session is not None:
+                runner = session["runner"]
+                if self is runner:
+                    target, target_y = session["runner_target"]
+                    if self.x == target and self.y == target_y:
+                        session["runner_target"] = self._random_roam_target(55)
+                        target, target_y = session["runner_target"]
+                else:
+                    lead = runner.motion_facing or runner.facing
+                    target = runner.x - lead * 80
+                    target_y = runner.y
+                self.facing = 1 if target >= self.x else -1
+                self.x = self._step_axis(self.x, target, ZOOM_SPEED)
+                self.y = self._step_axis(self.y, target_y, VCHASE_SPEED)
+                self.ground_y = self.y
+
         elif self.state == "zoomies":
             self.facing = 1 if self.target_x > self.x else -1
             self.x = self._step_axis(self.x, self.target_x, ZOOM_SPEED)
@@ -1846,6 +1910,10 @@ class DogiPet:
         if len(app.pets) < MAX_PETS:
             menu.add_command(label="🐶  Tambah teman", command=app.add_pet)
         if len(app.pets) > 1:
+            menu.add_command(
+                label="Main dengan teman",
+                command=lambda: app.start_friend_fun(self),
+            )
             menu.add_command(
                 label="👋  Pulangkan Dogi ini",
                 command=lambda: app.remove_pet(self),
@@ -4384,6 +4452,7 @@ class DogiApp:
         self.last_cursor = (0, 0)
         self.cursor_swing = CursorSwingDetector()
         self._friend_cd = 0
+        self._friend_sessions = []
 
         self.auto_update = True
         self.update_channel = "continuous"
@@ -5623,17 +5692,26 @@ class DogiApp:
         used = {p.theme for p in self.pets}
         pool = [t for t in COLOR_THEMES if t not in used] \
             or list(COLOR_THEMES)
-        x = random.randint(
-            self.screen_left + 40,
-            max(self.screen_left + 41, self.screen_right - CANVAS_W - 40),
-        )
-        self.pets.append(DogiPet(self, x, random.choice(pool)))
+        # Teman baru muncul dekat salah satu Dogi agar mereka bisa langsung
+        # saling mengenal, bukan terpisah jauh di monitor lain.
+        anchor = random.choice(self.pets)
+        direction = random.choice((-1, 1))
+        x = anchor.x + direction * (FRIEND_DIST - 25)
+        x = max(self.screen_left, min(self.screen_right - CANVAS_W, x))
+        newcomer = DogiPet(self, x, random.choice(pool))
+        self.pets.append(newcomer)
+        anchor.show_msg("Ada teman baru!", 3)
+        newcomer.show_msg("Hai! Ayo main!", 3)
+        self._friend_cd = 0
         if self.control_center:
             self.control_center.sync_from_app()
 
     def remove_pet(self, pet):
         if len(self.pets) <= 1:
             return
+        session = getattr(pet, "friend_session", None)
+        if session is not None:
+            self._finish_friend_session(session, celebrate=False)
         pet.destroy()
         self.pets.remove(pet)
         if pet.primary and self.pets:
@@ -5672,23 +5750,131 @@ class DogiApp:
         if bone in self.bones:
             self.bones.remove(bone)
 
+    def _start_friend_session(self, a, b, mode, now):
+        """Mulai satu interaksi terkoordinasi untuk sepasang Dogi."""
+        if mode not in FRIEND_DURATIONS or a is b:
+            return False
+        if getattr(a, "friend_session", None) is not None \
+                or getattr(b, "friend_session", None) is not None:
+            return False
+        left_pet, right_pet = (a, b) if a.center_x() <= b.center_x() else (b, a)
+        state = f"friend_{mode}"
+        session = {
+            "pets": (a, b),
+            "partner": {a: b, b: a},
+            "mode": mode,
+            "state": state,
+            "until": now + FRIEND_DURATIONS[mode],
+            "center_x": (a.center_x() + b.center_x()) / 2,
+            "center_y": (a.y + b.y) / 2,
+        }
+        if mode == "chase":
+            runner = random.choice((a, b))
+            session["runner"] = runner
+            session["runner_target"] = runner._random_roam_target(55)
+        self._friend_sessions.append(session)
+        for pet, role in ((left_pet, -1), (right_pet, 1)):
+            pet.friend_session = session
+            pet.friend_role = role
+            pet.set_state(state, 999999)
+
+        messages = {
+            "play": ("Ayo main!", "Hap! Hap!"),
+            "chase": ("Tangkap aku!", "Tunggu aku!"),
+            "tussle": ("Grr... bercanda!", "Guk! Aku menang!"),
+            "cuddle": ("Teman baik~", "Rebahan bareng~"),
+        }[mode]
+        a.show_msg(messages[0], 3)
+        b.show_msg(messages[1], 3)
+        self.stats["senang"] = clamp_stat(self.stats["senang"] + 3)
+        return True
+
+    def _finish_friend_session(self, session, celebrate=True):
+        if session in getattr(self, "_friend_sessions", []):
+            self._friend_sessions.remove(session)
+        for pet in session.get("pets", ()):
+            if getattr(pet, "friend_session", None) is not session:
+                continue
+            pet.friend_session = None
+            pet.friend_role = 0
+            if pet in self.pets and pet.state in FRIEND_STATES:
+                pet.set_state("happy" if celebrate else "idle", 10)
+
+    def _update_friend_sessions(self, now):
+        """Akhiri sesi serempak bila selesai atau salah satu Dogi terganggu."""
+        for session in list(getattr(self, "_friend_sessions", [])):
+            pets = session["pets"]
+            interrupted = any(
+                pet not in self.pets
+                or getattr(pet, "friend_session", None) is not session
+                or pet.state != session["state"]
+                for pet in pets
+            )
+            if interrupted or now >= session["until"]:
+                self._finish_friend_session(
+                    session, celebrate=not interrupted
+                )
+
+    def start_friend_fun(self, pet):
+        """Aksi menu: ajak Dogi senggang terdekat bermain sekarang."""
+        available = [
+            other for other in self.pets
+            if other is not pet
+            and other.state in (
+                "idle", "walk", "dig", "curious", "tail_wag", "beg",
+            )
+            and getattr(other, "friend_session", None) is None
+        ]
+        if pet.state not in (
+            "idle", "walk", "dig", "curious", "tail_wag", "beg",
+        ) or getattr(pet, "friend_session", None) is not None or not available:
+            pet.show_msg("Temanku sedang sibuk.", 3)
+            return False
+        partner = min(
+            available,
+            key=lambda other: math.hypot(
+                other.center_x() - pet.center_x(), other.y - pet.y
+            ),
+        )
+        mode = random.choices(
+            ("play", "chase", "tussle", "cuddle"),
+            weights=(4, 3, 2, 1),
+            k=1,
+        )[0]
+        started = self._start_friend_session(pet, partner, mode, time.time())
+        if started:
+            self._friend_cd = time.time() + FRIEND_COOLDOWN
+        return started
+
     def _check_friends(self, now):
-        """Dua Dogi berpapasan -> saling menyapa dengan gembira."""
+        """Dua Dogi berpapasan -> sapa, main, kejaran, adu lucu, atau rebahan."""
         if now < self._friend_cd:
             return
+        available_states = (
+            "idle", "walk", "dig", "curious", "tail_wag", "beg",
+        )
         for i in range(len(self.pets)):
             for j in range(i + 1, len(self.pets)):
                 a, b = self.pets[i], self.pets[j]
-                if a.state in ("idle", "walk", "dig", "curious", "tail_wag", "beg") \
-                        and b.state in ("idle", "walk", "dig", "curious", "tail_wag", "beg") \
+                if a.state in available_states and b.state in available_states \
+                        and getattr(a, "friend_session", None) is None \
+                        and getattr(b, "friend_session", None) is None \
                         and abs(a.center_x() - b.center_x()) < FRIEND_DIST \
                         and abs(a.y - b.y) < 80:
                     a.facing = 1 if b.x > a.x else -1
                     b.facing = -a.facing
-                    a.set_state("happy")
-                    b.set_state("happy")
-                    a.show_msg("Guk!", 2)
-                    b.show_msg("Guk guk!", 2)
+                    mode = random.choices(
+                        ("greet", "play", "chase", "tussle", "cuddle"),
+                        weights=(2, 4, 3, 2, 1),
+                        k=1,
+                    )[0]
+                    if mode == "greet":
+                        a.set_state("happy")
+                        b.set_state("happy")
+                        a.show_msg("Guk!", 2)
+                        b.show_msg("Guk guk!", 2)
+                    else:
+                        self._start_friend_session(a, b, mode, now)
                     self._friend_cd = now + FRIEND_COOLDOWN
                     return
 
@@ -5738,6 +5924,8 @@ class DogiApp:
             abs(cx - self.last_cursor[0]) + abs(cy - self.last_cursor[1]) > 3
         )
         self._check_rest(now, typing or moved)
+
+        self._update_friend_sessions(now)
 
         for pet in self.pets:
             pet.tick(

@@ -1,4 +1,4 @@
-# Design QA — DogiPet 1.0.1
+# Design QA — DogiPet 1.1.0
 
 **Source visual truth**
 
@@ -13,7 +13,7 @@
 
 **Implementation evidence**
 
-- `qa/all-states-preview.png` — audit cepat satu frame untuk semua 20 state,
+- `qa/all-states-preview.png` — audit cepat satu frame untuk semua 22 state,
   memastikan tidak ada pose yang kembali ke model lama.
 - `qa/handmade-sprites.png` — contact sheet penuh semua frame hasil generator
   grid tangan, termasuk ekor runcing dua fase dan pose tidur tanpa gelung.
@@ -29,7 +29,7 @@
 
 - Windows 11, display scaling 125%.
 - Pet viewport 230 × 176 logical px; state `idle`.
-- Full sheet: 20 state; 19 state memakai 4 frame dan mengetik memakai 16 frame.
+- Full sheet: 22 state; 21 state memakai 4 frame dan mengetik memakai 16 frame.
 
 **Full-view comparison evidence**
 
@@ -90,18 +90,21 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 - Tulang dapat diseret melintasi seluruh virtual desktop. Selama tombol mouse
   ditahan, state `wait_food` menjaga Dogi tetap duduk, menatap tulang, dan
   mengibaskan ekor; saat dilepas state kembali ke `fetch` menuju posisi baru.
+- Interaksi teman memakai sesi berpasangan agar kedua jendela tetap sinkron.
+  Pose `friend_play` dan `friend_tussle` memiliki siklus manual sendiri;
+  `friend_chase` memakai langkah lari dan `friend_cuddle` memakai pose tidur.
 - Sprite digendong, mengetik, scroll, meeting, tidur, makan, dan variasi gerak
   lain ikut berpindah ke aset bersih empat frame.
 
 ## Verification
 
-- 142 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
+- 150 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
   plugin deklaratif, konteks privat Tanya Dogi, jembatan Codex,
   perekam PCM, transkripsi/notulen rapat,
   detektor gesture, false-positive jitter,
-  multi-monitor negatif, glance, kelengkapan 1104 aset tema/arah, alpha PNG, dan
+  multi-monitor negatif, glance, kelengkapan 1200 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller dan kedua executable smoke test berhasil.
-- `DogiPet.exe` memiliki ProductVersion `1.0.1`.
+- `DogiPet.exe` memiliki ProductVersion `1.1.0`.
 
 final result: passed

@@ -885,6 +885,42 @@ def build_frames() -> dict[str, list[list[str]]]:
         happy.append(freeze(canvas))
     frames["happy"] = happy
 
+    # friend_play: membungkuk mengajak main lalu melompat kecil. Dua jendela
+    # Dogi saling menghadap sehingga pose ini terbaca sebagai permainan.
+    friend_play = []
+    for index, legs in enumerate(("crouch", "splay", "crouch", "tuck")):
+        canvas = stand(
+            legs=legs,
+            head_mode="happy",
+            tongue=True,
+            bob=1 if index in (0, 2) else 0,
+            tail=index % 2,
+        )
+        if index in (1, 3):
+            stamp(canvas, DUST, 2, 25)
+        # Hati kecil melompat mengikuti fase agar keempat frame tetap unik.
+        stamp(canvas, HEART_SMALL, 25 - index, 4 + index)
+        friend_play.append(freeze(canvas))
+    frames["friend_play"] = friend_play
+
+    # friend_tussle: adu dorong kartun tanpa ekspresi marah atau luka. Debu
+    # dan gonggongan kecil memberi rasa ramai, sementara mata tetap senang.
+    friend_tussle = []
+    for index, legs in enumerate(("splay", "crouch", "splay", "tuck")):
+        canvas = stand(
+            legs=legs,
+            head_mode="happy",
+            tongue=index % 2 == 0,
+            bark=index in (0, 2),
+            bob=index % 2,
+            tail=index % 2,
+        )
+        stamp(canvas, DUST, 2 + index * 2, 24 - index % 2)
+        if index in (0, 2):
+            stamp(canvas, WAVE_SMALL, 29, 8)
+        friend_tussle.append(freeze(canvas))
+    frames["friend_tussle"] = friend_tussle
+
     # wait_food: Dogi duduk menatap tulang yang masih dipegang. Ekor runcing
     # berkibas dan setitik air liur turun perlahan sebelum siklus diulang.
     wait_food = []
@@ -1089,8 +1125,8 @@ def main() -> None:
     frames = build_frames()
     expected = {
         "idle": 4, "walk": 4, "chase": 4, "fetch": 4, "sleep": 4,
-        "happy": 4, "wait_food": 4, "dig": 4, "eat": 4, "hold": 4,
-        "type": 16,
+        "happy": 4, "friend_play": 4, "friend_tussle": 4,
+        "wait_food": 4, "dig": 4, "eat": 4, "hold": 4, "type": 16,
         "scroll_up": 4, "scroll_down": 4, "meeting_alert": 4,
         "meeting_watch": 4, "think": 4, "tail_wag": 4,
         "jump": 4, "dizzy": 4, "pee": 4,
