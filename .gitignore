@@ -14,6 +14,7 @@ Thumbs.db
 .env
 node_modules/
 .npm-cache/
+.vite/
 credentials*.json
 client_secret*.json
 token*.json
