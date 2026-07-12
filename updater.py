@@ -57,14 +57,20 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 def is_newer_version(candidate: str, current: str) -> bool:
+    comparison = compare_versions(candidate, current)
+    return comparison is not None and comparison > 0
+
+
+def compare_versions(candidate: str, current: str) -> int | None:
+    """Bandingkan versi; hasil -1/0/1, atau None bila format tidak valid."""
     candidate_parts = _version_tuple(candidate)
     current_parts = _version_tuple(current)
     if not candidate_parts or not current_parts:
-        return False
+        return None
     width = max(len(candidate_parts), len(current_parts))
-    return candidate_parts + (0,) * (width - len(candidate_parts)) > (
-        current_parts + (0,) * (width - len(current_parts))
-    )
+    candidate_parts += (0,) * (width - len(candidate_parts))
+    current_parts += (0,) * (width - len(current_parts))
+    return (candidate_parts > current_parts) - (candidate_parts < current_parts)
 
 
 def _request_json(url: str, timeout: int = 15) -> dict:
@@ -118,7 +124,17 @@ def get_update_info(
     version = str(manifest.get("version") or release.get("tag_name") or "").lstrip("v")
     build_id = str(manifest.get("build_id") or "")
     if channel == "continuous":
-        has_update = bool(build_id and build_id not in {current_build, "source"})
+        # Continuous membedakan build berdasarkan commit, tetapi tidak boleh
+        # menawarkan manifest dengan versi semantik lebih rendah. Sebelumnya
+        # build 0.5.4 dianggap update untuk instalasi lokal 0.6.1 hanya karena
+        # SHA-nya berbeda, sehingga tombol Yes justru melakukan downgrade.
+        version_order = compare_versions(version, current_version)
+        has_update = bool(
+            version_order is not None
+            and version_order >= 0
+            and build_id
+            and build_id not in {current_build, "source"}
+        )
     else:
         has_update = is_newer_version(version, current_version)
     if not has_update:

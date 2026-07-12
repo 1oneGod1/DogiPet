@@ -18,6 +18,8 @@ if (-not $Version) {
 
 & $Python scripts/set_build_info.py --build-id $BuildId
 if ($LASTEXITCODE -ne 0) { throw "Gagal menulis metadata build." }
+& $Python scripts/draw_sprites.py
+if ($LASTEXITCODE -ne 0) { throw "Gagal menggambar ulang sprite Dogi." }
 & $Python scripts/generate_assets.py
 if ($LASTEXITCODE -ne 0) { throw "Gagal membuat aset aplikasi." }
 & $Python -m PyInstaller --noconfirm --clean DogiPet.spec

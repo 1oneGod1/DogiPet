@@ -1,26 +1,27 @@
-# Design QA — DogiPet 0.5.4
+# Design QA — DogiPet 1.0.1
 
 **Source visual truth**
 
-- `new_frames_preview.png` — referensi kepadatan pixel asli dari pengguna.
-- `assets/reference/dogi-chunky-sprite-sheet-v051.png` — lembar sprite chunky
-  hasil rekreasi, diproses ke grid logis yang sama dengan renderer lama.
+- `C:/Users/ANDIPU~1/AppData/Local/Temp/codex-clipboard-7c5b2a82-47a4-460f-981b-1f260b7dd8ce.png`
+  — referensi final yang dipilih pengguna: kuping tegak, badan tidak oval,
+  ekor runcing, dan kepadatan pixel rendah.
+- `scripts/draw_sprites.py` — sumber visual canonical, digambar manual sebagai
+  template grid 32 × 28 dan dirender nearest-neighbor ke PNG transparan.
+- `new_frames_preview.png` — referensi kepadatan pixel awal dari pengguna.
 - `C:/Users/Andi Purba/Downloads/3ddea762-ed69-4fbf-a598-bea4ae85e14e.png`
   — referensi khusus pose pusing.
 
 **Implementation evidence**
 
-- `qa/sprite-sheet-comparison-v051.png` — source dan seluruh sprite hasil impor
-  ditampilkan bersama.
-- `qa/pixel-density-comparison-v051.png` — referensi lama dan tiga baris sprite
-  baru dalam satu comparison input.
-- `qa/pixel-density-implementation-v051.png` — render Tk dari state `idle`
-  melalui opsi QA `--opaque-preview --state=idle`.
+- `qa/all-states-preview.png` — audit cepat satu frame untuk semua 20 state,
+  memastikan tidak ada pose yang kembali ke model lama.
+- `qa/handmade-sprites.png` — contact sheet penuh semua frame hasil generator
+  grid tangan, termasuk ekor runcing dua fase dan pose tidur tanpa gelung.
 - `qa/think-animation-v052.png` — urutan ping-pong bingung yang dipakai app.
 - `qa/walk-right-v052.png` dan `qa/run-right-v052.png` — frame sumber-kiri
   setelah dicerminkan untuk gerakan ke kanan.
-- `qa/type-animation-v054.png` — strip mengetik baru dengan delapan frame,
-  tubuh/laptop stabil, paw bergantian, dan pose penutup sama dengan pose awal.
+- `qa/handmade-sprites.png` — strip mengetik 16 frame dengan keyboard mandiri,
+  paw bergantian, empat tahap merah wajah, serta scroll dengan laptop + mouse.
 - `qa/behaviors-v054.png` — empat tingkah spontan baru: curious, tail wag,
   beg, dan zoomies.
 
@@ -28,20 +29,18 @@
 
 - Windows 11, display scaling 125%.
 - Pet viewport 230 × 176 logical px; state `idle`.
-- Full sheet: 17 state, masing-masing 4 frame.
+- Full sheet: 20 state; 19 state memakai 4 frame dan mengetik memakai 16 frame.
 
 **Full-view comparison evidence**
 
-`qa/sprite-sheet-comparison-v051.png` menunjukkan siluet, arah hadap, laptop,
-panah scroll, monitor meeting, tanda tanya, spiral pusing, dan karakter Dogi
-tetap konsisten setelah dipotong ke canvas aplikasi. Ruang vertikal tambahan
-pada atlas implementasi disengaja agar semua state memakai viewport 160 × 140
-tanpa perubahan posisi jendela desktop.
+`qa/all-states-preview.png` menunjukkan siluet, arah hadap, laptop, panah
+scroll, gonggongan meeting, tanda tanya, pusing, digendong, tidur, dan karakter
+Dogi tetap konsisten memakai model low-pixel baru. Semua state memakai viewport
+160 × 140 tanpa perubahan posisi jendela desktop.
 
 **Focused region comparison evidence**
 
-`qa/pixel-density-comparison-v051.png` membandingkan referensi lama dan sprite
-baru. Setiap frame baru diturunkan ke canvas logis 32 × 28 lalu diperbesar
+Setiap frame generator berada pada canvas logis 32 × 28 lalu diperbesar
 nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 `SCALE = 5` renderer lama. Tidak ada checkerboard, fringe hijau, blur, atau crop.
 
@@ -66,36 +65,43 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Interactions verified
 
-- Dogi menoleh sesuai arah gerak horizontal kursor saat idle/walk/happy.
+- Gerak kursor biasa memicu `glance`: pupil memilih kiri/atas/kanan tanpa
+  memindahkan atau membalik badan. Peluang mengejar hanya 16% dengan cooldown.
+- Koordinat virtual desktop Windows dipakai untuk jalan, kejar, drag, tulang,
+  spawn, serta geometry Tk negatif sehingga Dogi dapat masuk monitor lain.
 - Walk, chase, dan fetch memakai metadata arah sumber-kiri; sprite dicerminkan
   ketika koordinat bergerak ke kanan sehingga kepala selalu menuju target.
 - Animasi bingung memakai urutan `0,1,2,3,2,1`, tiap frame ditahan dua tick;
   transisi siklus tidak lagi melompat dari frame terakhir ke pertama.
 - Arah visual walk/chase/fetch dicatat dari delta `x` aktual setiap tick; arah
   target atau kursor tidak dapat membuat sprite tampak berjalan mundur.
-- Mengetik memakai delapan frame konsisten dan mempertahankan state `type`
-  selama input aktif, tanpa satu frame idle saat timer internal diperbarui.
-- Laptop dibangun ulang pada grid 32 × 28: screen 4 × 8 logical px dan base
-  keyboard 9 × 3 logical px; seluruh frame memiliki padding kanan dan tidak
-  menyentuh batas canvas.
+- Mengetik memakai empat fase tombol pada setiap empat tingkat merah wajah dan
+  mempertahankan state `type` selama input aktif, tanpa frame idle terselip.
+- Keyboard mengetik berdiri sebagai prop rendah tersendiri. Scroll memakai prop
+  berbeda: laptop tegak, scrollbar bergerak, mouse, dan satu paw aktif.
 - Empat behavior baru ikut scheduler kebutuhan/jam, tersedia di menu klik
   kanan, dan tetap dapat diinterupsi input, meeting, drag, atau agent.
-- Empat pembalikan dengan lintasan minimal 55 px dalam 2,6 detik memicu state
-  `dizzy` selama sekitar 4,8 detik.
-- Gerakan kecil/jitter tidak memicu pusing dan cooldown delapan detik mencegah
+- Tujuh pembalikan dengan lintasan minimal 130 px dalam 2,4 detik memicu state
+  `dizzy`; gerakan mouse kerja biasa tidak cukup untuk memicunya.
+- Gerakan kecil/jitter tidak memicu pusing dan cooldown 30 detik mencegah
   animasi berulang tanpa jeda.
 - State drag, fetch, agent thinking, serta meeting alert/watch tidak ditimpa
   oleh gesture pusing.
+- Tulang dapat diseret melintasi seluruh virtual desktop. Selama tombol mouse
+  ditahan, state `wait_food` menjaga Dogi tetap duduk, menatap tulang, dan
+  mengibaskan ekor; saat dilepas state kembali ke `fetch` menuju posisi baru.
 - Sprite digendong, mengetik, scroll, meeting, tidur, makan, dan variasi gerak
   lain ikut berpindah ke aset bersih empat frame.
 
 ## Verification
 
-- 51 unit test lulus, termasuk detektor gesture, false-positive jitter,
-  integrasi state pusing, kelengkapan 816 aset tema/arah, alpha PNG, dan
+- 142 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
+  plugin deklaratif, konteks privat Tanya Dogi, jembatan Codex,
+  perekam PCM, transkripsi/notulen rapat,
+  detektor gesture, false-positive jitter,
+  multi-monitor negatif, glance, kelengkapan 1104 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
-- PyInstaller, executable smoke, installer silent, installed-app smoke, dan
-  uninstall berhasil.
-- `DogiPet.exe` dan `DogiPet-Setup.exe` memiliki ProductVersion `0.5.4`.
+- PyInstaller dan kedua executable smoke test berhasil.
+- `DogiPet.exe` memiliki ProductVersion `1.0.1`.
 
 final result: passed

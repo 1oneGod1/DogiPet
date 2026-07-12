@@ -12,6 +12,12 @@ class VersionTests(unittest.TestCase):
         self.assertFalse(updater.is_newer_version("1.2.0", "1.2.0"))
         self.assertFalse(updater.is_newer_version("continuous", "1.2.0"))
 
+    def test_compare_versions_rejects_invalid_and_orders_valid_versions(self):
+        self.assertEqual(updater.compare_versions("0.5.4", "0.6.1"), -1)
+        self.assertEqual(updater.compare_versions("0.6.1", "0.6.1"), 0)
+        self.assertEqual(updater.compare_versions("0.7.0", "0.6.1"), 1)
+        self.assertIsNone(updater.compare_versions("continuous", "0.6.1"))
+
 
 class ReleaseTests(unittest.TestCase):
     release = {
@@ -39,7 +45,10 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(
             updater,
             "_request_json",
-            side_effect=[self.release, {"version": "1.0.0", "build_id": "new-sha"}],
+            side_effect=[
+                self.release,
+                {"version": updater.VERSION, "build_id": "new-sha"},
+            ],
         ):
             info = updater.get_update_info("continuous", current_build="old-sha")
         self.assertEqual(info.build_id, "new-sha")
@@ -48,10 +57,36 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(
             updater,
             "_request_json",
-            side_effect=[self.release, {"version": "1.0.0", "build_id": "same-sha"}],
+            side_effect=[
+                self.release,
+                {"version": updater.VERSION, "build_id": "same-sha"},
+            ],
         ):
             info = updater.get_update_info("continuous", current_build="same-sha")
         self.assertIsNone(info)
+
+    def test_continuous_build_never_downgrades_semantic_version(self):
+        with mock.patch.object(
+            updater,
+            "_request_json",
+            side_effect=[self.release, {"version": "0.5.4", "build_id": "e51de53d"}],
+        ):
+            info = updater.get_update_info(
+                "continuous", current_version="0.6.1", current_build="local-build"
+            )
+        self.assertIsNone(info)
+
+    def test_continuous_accepts_different_build_of_same_version(self):
+        with mock.patch.object(
+            updater,
+            "_request_json",
+            side_effect=[self.release, {"version": "0.6.1", "build_id": "new-sha"}],
+        ):
+            info = updater.get_update_info(
+                "continuous", current_version="0.6.1", current_build="old-sha"
+            )
+        self.assertIsNotNone(info)
+        self.assertEqual(info.build_id, "new-sha")
 
 
 class DownloadTests(unittest.TestCase):
