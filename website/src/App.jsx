@@ -94,7 +94,7 @@ const features = [
   {
     number: "06",
     title: "CATATAN & KALENDER",
-    description: "Rapikan catatan, buat notulen, dan ingat agenda Google Calendar.",
+    description: "Daily Hub merangkum tugas, catatan, notulen, dan agenda Google Calendar.",
     Icon: CalendarDots,
     sprites: ["happy_0.png"],
   },
@@ -168,7 +168,7 @@ function Header() {
         <a href="#faq" onClick={close}>FAQ</a>
       </nav>
       <a className="version-badge" href={REPO_URL} target="_blank" rel="noreferrer">
-        VERSI 2.0.0
+        VERSI 2.1.0
       </a>
     </header>
   );
@@ -233,7 +233,7 @@ function Hero() {
           <DownloadButton dark />
           <dl>
             <div><dt>SISTEM</dt><dd>Windows 10/11</dd></div>
-            <div><dt>VERSI</dt><dd>2.0.0 (64-bit)</dd></div>
+            <div><dt>VERSI</dt><dd>2.1.0 (64-bit)</dd></div>
             <div><dt>UPDATE</dt><dd>Otomatis dari GitHub</dd></div>
           </dl>
         </aside>
@@ -340,7 +340,7 @@ export function App() {
         <a href={REPO_URL} target="_blank" rel="noreferrer"><GithubLogo size={22} weight="fill" /> GITHUB</a>
       </footer>
       <div className="sticky-download">
-        <span><img src={`${ASSET_URL}idle_0.png`} alt="" /><b>DOGIPET 2.0</b></span>
+        <span><img src={`${ASSET_URL}idle_0.png`} alt="" /><b>DOGIPET 2.1</b></span>
         <DownloadButton compact />
       </div>
     </div>

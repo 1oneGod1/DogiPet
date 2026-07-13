@@ -1,4 +1,14 @@
-# Design QA — DogiPet 2.0.0
+# Design QA — DogiPet 2.1.0
+
+## Control Center 2.1
+
+- Beranda memiliki Daily Hub untuk tugas, catatan, agenda, dan status Codex.
+- Halaman Status Sistem menampilkan kesiapan AI, kalender, publish/update, dan
+  privasi rekaman dalam empat kartu dengan aksi langsung.
+- QA visual dilakukan pada viewport 1050 x 830; tidak ada kartu, label, atau
+  tombol yang saling bertumpuk.
+- Bukti: `qa/control-center-home-v210.png` dan
+  `qa/control-center-status-v210.png`.
 
 **Source visual truth**
 
@@ -109,13 +119,14 @@ nearest-neighbor; setiap blok warna tepat 5 × 5 px, sama dengan konstanta
 
 ## Verification
 
-- 165 unit test lulus, termasuk tugas, memori, pencarian, backup AES-GCM,
+- 167 unit test lulus, termasuk ringkasan Daily Hub, tugas, memori, pencarian,
+  backup AES-GCM,
   plugin deklaratif, konteks privat Tanya Dogi, jembatan Codex,
   perekam PCM, transkripsi/notulen rapat,
   detektor gesture, false-positive jitter,
   multi-monitor negatif, glance, kelengkapan 1200 aset tema/arah, alpha PNG, dan
   pemeriksaan keseragaman setiap blok 5 × 5 px.
 - PyInstaller dan kedua executable smoke test berhasil.
-- `DogiPet.exe` memiliki ProductVersion `2.0.0`.
+- `DogiPet.exe` memiliki ProductVersion `2.1.0`.
 
 final result: passed
