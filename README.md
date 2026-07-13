@@ -24,6 +24,10 @@ sementara desktop pet tetap aktif.
 
 ## Fitur saat ini
 
+- **Daily Hub** di Beranda merangkum tugas aktif, jumlah catatan, agenda, dan
+  kesiapan Codex tanpa perlu membuka banyak halaman. Halaman **Status Sistem**
+  menyatukan koneksi AI, Google Calendar, update, privasi rekaman, website, dan
+  rolling release dengan aksi langsung yang mudah ditemukan.
 - Animasi pixel-art empat frame yang tajam untuk tiap aksi utama.
 - Berkeliaran mendatar maupun vertikal dan dapat menyeberang ke monitor lain,
   termasuk monitor yang berada di kiri/atas koordinat monitor utama.

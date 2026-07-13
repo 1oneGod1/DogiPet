@@ -40,6 +40,6 @@ privasi, FAQ, dan CTA diperiksa per-region serta melalui DOM.
 
 Tidak ada perbedaan P0, P1, atau P2 yang tersisa. Perbedaan kecil pada panjang
 halaman dan susunan teks adalah P3 yang disengaja untuk menampung konten produk
-DogiPet 2.0 tanpa mengubah bahasa visual acuan.
+DogiPet 2.1 tanpa mengubah bahasa visual acuan.
 
 final result: passed

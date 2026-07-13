@@ -2220,6 +2220,29 @@ class DogiPet:
 
 
 # -------------------------------------------------------------- control center
+def control_center_summary(app):
+    """Ringkasan data lokal untuk Daily Hub dan pemeriksaan kesiapan UI."""
+    pending_tasks = sum(not item.done for item in app.task_store.all())
+    note_count = len(app.note_store.all())
+    agenda_count = len(app.calendar_events)
+    checks = {
+        "dogi": bool(app.pets),
+        "codex": bool(app.codex_authenticated),
+        "calendar": bool(app.calendar_connected),
+        "updates": bool(app.auto_update),
+    }
+    return {
+        "pending_tasks": pending_tasks,
+        "note_count": note_count,
+        "agenda_count": agenda_count,
+        "checks": checks,
+        "ready_count": sum(checks.values()),
+        "recording": bool(
+            app.meeting_recorder.recording or app.voice_recorder.recording
+        ),
+    }
+
+
 class ControlCenter:
     """Jendela pengaturan native yang mengendalikan desktop pet."""
 
@@ -2237,7 +2260,7 @@ class ControlCenter:
         self.win = tk.Toplevel(app.root)
         self.win.title("DogiPet Control Center")
         self.win.configure(bg=self.BG)
-        self.win.resizable(False, False)
+        self.win.resizable(True, True)
         self.win.protocol("WM_DELETE_WINDOW", self.hide)
         try:
             self._window_icon = tk.PhotoImage(
@@ -2270,6 +2293,7 @@ class ControlCenter:
         self.theme_buttons = {}
         self._build_shell()
         self._build_home_page()
+        self._build_status_page()
         self._build_customize_page()
         self._build_world_page()
         self._build_focus_page()
@@ -2284,9 +2308,19 @@ class ControlCenter:
         self._build_about_page()
         self.show_page("HOME")
         self.win.update_idletasks()
-        natural_width = self.win.winfo_reqwidth()
-        natural_height = self.win.winfo_reqheight()
         left, top, right, bottom = app_desktop_bounds(self.app)
+        available_width = max(640, right - left - 40)
+        available_height = max(560, bottom - top - 80)
+        natural_width = min(
+            max(self.win.winfo_reqwidth(), 960), available_width
+        )
+        natural_height = min(
+            max(self.win.winfo_reqheight(), 830), available_height
+        )
+        self.win.minsize(
+            min(900, natural_width),
+            min(720, natural_height),
+        )
         x = max(left + 20, left + (right - left - natural_width) // 2)
         y = max(top + 20, top + (bottom - top - natural_height) // 2)
         self.win.geometry(window_geometry(natural_width, natural_height, x, y))
@@ -2383,6 +2417,7 @@ class ControlCenter:
         )
         for page, label in (
             ("HOME", "BERANDA"),
+            ("STATUS", "STATUS SISTEM"),
             ("CUSTOMIZE", "TAMPILAN"),
             ("WORLD", "DUNIA DOGI"),
             ("FOCUS", "FOKUS"),
@@ -2433,7 +2468,9 @@ class ControlCenter:
             "Teman kecilmu sedang aktif di desktop.",
         )
         columns = tk.Frame(page, bg=self.BG)
-        columns.pack(fill="both", expand=True)
+        columns.pack(fill="x")
+        columns.configure(height=388)
+        columns.pack_propagate(False)
 
         preview_card = self._card(columns, width=360)
         preview_card.pack(side="left", fill="both", expand=True, padx=(0, 12))
@@ -2500,6 +2537,153 @@ class ControlCenter:
 
         self.pet_count_label = self._label(actions, "", 8, self.MUTED)
         self.pet_count_label.pack(side="bottom", pady=8)
+
+        hub = self._card(page)
+        hub.pack(fill="x", pady=(12, 0))
+        hub_top = tk.Frame(hub, bg=self.PANEL)
+        hub_top.pack(fill="x", padx=14, pady=(11, 7))
+        self._label(hub_top, "DAILY HUB", 8, self.MUTED, bold=True).pack(side="left")
+        self.home_readiness_label = self._label(hub_top, "", 8, self.ACCENT, bold=True)
+        self.home_readiness_label.pack(side="right")
+
+        stats = tk.Frame(hub, bg=self.PANEL)
+        stats.pack(fill="x", padx=10)
+        self.home_hub_labels = {}
+        for key, title in (
+            ("tasks", "TUGAS AKTIF"),
+            ("notes", "CATATAN"),
+            ("calendar", "AGENDA"),
+            ("codex", "CODEX"),
+        ):
+            cell = tk.Frame(stats, bg=self.PANEL_ALT, width=145, height=48)
+            cell.pack(side="left", fill="x", expand=True, padx=4)
+            cell.pack_propagate(False)
+            self._label(cell, title, 7, self.MUTED, bold=True, bg=self.PANEL_ALT).pack(
+                anchor="w", padx=9, pady=(6, 0)
+            )
+            value = self._label(cell, "...", 10, bold=True, bg=self.PANEL_ALT)
+            value.pack(anchor="w", padx=9)
+            self.home_hub_labels[key] = value
+
+        hub_actions = tk.Frame(hub, bg=self.PANEL)
+        hub_actions.pack(fill="x", padx=14, pady=(8, 11))
+        for text, page_name in (
+            ("BUKA TUGAS", "TASKS"),
+            ("TANYA DOGI", "ASSISTANT"),
+            ("CATATAN", "NOTES"),
+            ("STATUS LENGKAP", "STATUS"),
+        ):
+            self._button(
+                hub_actions,
+                text,
+                lambda name=page_name: self.show_page(name),
+                width=13,
+                pady=5,
+            ).pack(side="left", padx=(0, 5), expand=True, fill="x")
+
+    def _build_status_page(self):
+        page = self._new_page(
+            "STATUS",
+            "SEMUA SIAP DALAM SATU TEMPAT.",
+            "Periksa AI, kalender, update, dan privasi sebelum mulai bekerja.",
+        )
+
+        summary = self._card(page)
+        summary.pack(fill="x", pady=(0, 10))
+        summary_left = tk.Frame(summary, bg=self.PANEL)
+        summary_left.pack(side="left", padx=18, pady=14)
+        self._label(summary_left, "KESIAPAN DOGIPET", 8, self.MUTED, bold=True).pack(anchor="w")
+        self.system_readiness_label = self._label(summary_left, "MEMERIKSA...", 17, bold=True)
+        self.system_readiness_label.pack(anchor="w", pady=(3, 0))
+        self._button(
+            summary,
+            "PERBARUI STATUS",
+            self._refresh_system_status,
+            accent=True,
+            width=18,
+            pady=7,
+        ).pack(side="right", padx=18)
+
+        grid = tk.Frame(page, bg=self.BG)
+        grid.pack(fill="both", expand=True)
+        self.system_status_labels = {}
+
+        def status_card(parent, key, title, description, actions):
+            card = self._card(parent)
+            card.pack(fill="both", expand=True, pady=(0, 9))
+            self._label(card, title, 9, self.MUTED, bold=True).pack(
+                anchor="w", padx=14, pady=(12, 2)
+            )
+            status = self._label(
+                card, "MEMERIKSA...", 10, bold=True, justify="left", wraplength=285
+            )
+            status.pack(anchor="w", padx=14)
+            self.system_status_labels[key] = status
+            self._label(card, description, 8, self.MUTED, justify="left", wraplength=275).pack(
+                anchor="w", padx=14, pady=(4, 8)
+            )
+            row = tk.Frame(card, bg=self.PANEL)
+            row.pack(fill="x", padx=14, pady=(0, 12))
+            button_width = 8 if len(actions) >= 3 else 12
+            for text, command, accent in actions:
+                self._button(
+                    row, text, command, accent=accent, width=button_width, pady=5
+                ).pack(
+                    side="left", padx=(0, 5), expand=True, fill="x"
+                )
+
+        left = tk.Frame(grid, bg=self.BG)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        right = tk.Frame(grid, bg=self.BG)
+        right.pack(side="left", fill="both", expand=True, padx=(5, 0))
+
+        status_card(
+            left,
+            "codex",
+            "AI & CODEX",
+            "Login resmi dipakai tanpa membaca password atau token akunmu.",
+            (
+                ("HUBUNGKAN", self._connect_codex, True),
+                ("TANYA DOGI", lambda: self.show_page("ASSISTANT"), False),
+            ),
+        )
+        status_card(
+            left,
+            "calendar",
+            "GOOGLE CALENDAR",
+            "Akses read-only; DogiPet tidak dapat mengubah atau menghapus agenda.",
+            (
+                ("BUKA AGENDA", lambda: self.show_page("NOTES"), True),
+                ("SINKRON", lambda: self.app.sync_google_calendar_async(manual=True), False),
+            ),
+        )
+        status_card(
+            right,
+            "updates",
+            "PUBLISH & UPDATE",
+            "Installer terverifikasi dari GitHub Releases dan website publik DogiPet.",
+            (
+                ("CEK UPDATE", lambda: self.app.check_updates(manual=True), True),
+                ("WEBSITE", lambda: webbrowser.open("https://1onegod1.github.io/DogiPet/"), False),
+                ("RELEASE", lambda: webbrowser.open(RELEASE_PAGE), False),
+            ),
+        )
+        status_card(
+            right,
+            "privacy",
+            "PRIVASI & REKAMAN",
+            "Mikrofon, audio rapat, dan sumber AI hanya aktif setelah tindakanmu.",
+            (
+                ("REKAM RAPAT", lambda: self.show_page("MEETING"), True),
+                ("REAKSI", lambda: self.show_page("REACTIONS"), False),
+            ),
+        )
+
+    def _refresh_system_status(self):
+        self.app.refresh_codex_status_async()
+        if self.app.calendar_connected:
+            self.app.sync_google_calendar_async(manual=True)
+        self.sync_from_app()
 
     def _build_customize_page(self):
         page = self._new_page(
@@ -4501,6 +4685,44 @@ class ControlCenter:
         self.preview_name.configure(text=self.app.pet_name.upper())
         self._draw_preview()
         self.pet_count_label.configure(text=f"{len(self.app.pets)} / {MAX_PETS} DOGI AKTIF")
+        summary = control_center_summary(self.app)
+        pending_tasks = summary["pending_tasks"]
+        note_count = summary["note_count"]
+        agenda_count = summary["agenda_count"]
+        readiness = summary["ready_count"]
+        self.home_readiness_label.configure(text=f"{readiness}/4 SISTEM SIAP")
+        self.home_hub_labels["tasks"].configure(text=str(pending_tasks))
+        self.home_hub_labels["notes"].configure(text=str(note_count))
+        self.home_hub_labels["calendar"].configure(
+            text=str(agenda_count) if self.app.calendar_connected else "BELUM"
+        )
+        self.home_hub_labels["codex"].configure(
+            text="SIAP" if self.app.codex_authenticated else "BELUM"
+        )
+        self.system_readiness_label.configure(
+            text=f"{readiness}/4 SIAP",
+            fg=self.ACCENT if readiness == 4 else self.TEXT,
+        )
+        self.system_status_labels["codex"].configure(
+            text=("AKUN CODEX TERHUBUNG" if self.app.codex_authenticated else self.app.codex_status_text),
+            fg=self.ACCENT if self.app.codex_authenticated else self.TEXT,
+        )
+        self.system_status_labels["calendar"].configure(
+            text=self.app.calendar_status,
+            fg=self.ACCENT if self.app.calendar_connected else self.TEXT,
+        )
+        self.system_status_labels["updates"].configure(
+            text=(
+                f"VERSI {VERSION}  /  {self.app.update_channel.upper()}  /  "
+                f"AUTO {'ON' if self.app.auto_update else 'OFF'}"
+            ),
+            fg=self.ACCENT if self.app.auto_update else self.TEXT,
+        )
+        recording_now = summary["recording"]
+        self.system_status_labels["privacy"].configure(
+            text="REKAMAN SEDANG AKTIF" if recording_now else "OPT-IN  /  TIDAK MEREKAM",
+            fg="#e2574c" if recording_now else self.ACCENT,
+        )
         life_pet = self._life_pet()
         for index, button in enumerate(self.life_pet_buttons):
             available = index < len(self.app.pets)
